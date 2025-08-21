@@ -28,15 +28,13 @@ def merge_pointclouds(pcd_list):
     # 逐一拼接
     all_xyz = []
     all_rgb = []
-    for p in pcd_list:
+    for p, obj_id in pcd_list:
         if len(p.points) == 0:
             continue
         all_xyz.append(np.asarray(p.points))
-        if p.has_colors():
-            all_rgb.append(np.asarray(p.colors))
-        else:
-            # 若无颜色，填充为白色
-            all_rgb.append(np.ones((len(p.points), 3), dtype=np.float32))
+        # 将RGB颜色设置为obj_id的数值
+        obj_id_color = np.full((len(p.points), 3), obj_id / 255.0, dtype=np.float32)
+        all_rgb.append(obj_id_color)
     if len(all_xyz) == 0:
         return o3d.geometry.PointCloud()
     xyz = np.vstack(all_xyz)
