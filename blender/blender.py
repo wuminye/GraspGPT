@@ -8,8 +8,20 @@ import glob
 
 def clear_scene():
     """Clear all mesh objects in the scene"""
+    # Select all objects
     bpy.ops.object.select_all(action='SELECT')
-    bpy.ops.object.delete(use_global=False, confirm=False)
+    
+    # Delete all selected objects
+    if bpy.context.selected_objects:
+        bpy.ops.object.delete()
+    
+    # Alternative method: delete objects directly
+    for obj in bpy.data.objects:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    
+    # Clear all materials
+    for material in bpy.data.materials:
+        bpy.data.materials.remove(material, do_unlink=True)
 
 def import_ply_file(filepath):
     """Import PLY file and return the created object"""
@@ -141,7 +153,80 @@ def remove_physics_from_objects(objects):
             
             obj.select_set(False)
 
-def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, simulation_frames=250):
+def set_object_color_by_id(obj, model_id):
+    """Set material color based on model ID"""
+    # Generate color based on model ID
+    random.seed(model_id)  # Ensure consistent colors for same ID
+    color = (model_id/255.0, model_id/255.0, model_id/255.0, 1.0)
+    
+    # Create or get material
+    material_name = f"Material_{model_id:03d}"
+   
+    material = bpy.data.materials.new(name=material_name)
+    material.use_nodes = True
+    bsdf = material.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs['Base Color'].default_value = color
+
+    
+    # Assign material to object
+    if obj.data.materials:
+        obj.data.materials[0] = material
+    else:
+        obj.data.materials.append(material)
+
+def save_final_meshes(output_dir, imported_objects, object_ids):
+    """Save final frame meshes to target directory, excluding walls and floors"""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Clear selection
+    bpy.ops.object.select_all(action='DESELECT')
+    
+    # Select all objects except walls and floors
+    valid_objects = []
+    for i, obj in enumerate(imported_objects):
+        if obj and obj.name and not obj.name.startswith(('Wall_', 'Floor')):
+            # Set object color based on model ID
+            model_id = object_ids[i] if i < len(object_ids) else i
+            set_object_color_by_id(obj, model_id)
+            
+            # Select the object
+            obj.select_set(True)
+            valid_objects.append(obj)
+    
+    if valid_objects:
+        # Clear all selections first to ensure proper material display
+        bpy.ops.object.select_all(action='DESELECT')
+        
+        # Re-select valid objects
+        for obj in valid_objects:
+            obj.select_set(True)
+        
+        # Set one of the objects as active
+        bpy.context.view_layer.objects.active = valid_objects[0]
+        
+        # Export OBJ format only
+        obj_path = os.path.join(output_dir, "final_scene.obj")
+        
+        # Export OBJ with materials
+        bpy.ops.export_scene.obj(
+            filepath=obj_path,
+            use_selection=True,
+            use_mesh_modifiers=False,
+            use_normals=False,
+            use_uvs=False,
+            use_materials=True,
+            use_vertex_groups=False,
+            global_scale=1.0
+        )
+        
+        print(f"Saved {len(valid_objects)} objects to {output_dir}")
+    
+    # Clear selection
+    bpy.ops.object.select_all(action='DESELECT')
+
+def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, simulation_frames=250, output_dir=None):
     """
     Main function: Load PLY files and perform physics simulation
     
@@ -151,6 +236,7 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     - bbox_max: bbox maximum coordinates (x, y, z)  
     - num_objects: Number of objects to place
     - simulation_frames: Number of frames for physics simulation
+    - output_dir: Directory to save final meshes (optional)
     """
     
     # Clear scene
@@ -175,9 +261,14 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     # Randomly select and import PLY files
     selected_files = random.sample(ply_files, min(num_objects, len(ply_files)))
     imported_objects = []
+    object_ids = []  # Track model IDs
     
     for i, ply_file in enumerate(selected_files):
         print(f"Importing object {i+1}: {os.path.basename(ply_file)}")
+        
+        # Extract model ID from file path (assuming format like '000/nontextured_simplified_blender_3.ply')
+        model_id = int(os.path.basename(os.path.dirname(ply_file)))
+        object_ids.append(model_id)
         
         # Import PLY file
         obj = import_ply_file(ply_file)
@@ -221,6 +312,11 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     # Reset timeline to show final result
     bpy.context.scene.frame_set(simulation_frames)
     
+    # Save final meshes if output directory is specified
+    if output_dir:
+        print(f"Saving final meshes to {output_dir}...")
+        save_final_meshes(output_dir, imported_objects, object_ids)
+    
     print("Physics simulation completed!")
     print(f"Successfully imported and simulated {len(imported_objects)} objects")
     print("Final geometry preserved - objects will maintain their settled positions")
@@ -233,6 +329,7 @@ if __name__ == "__main__":
     BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates
     NUM_OBJECTS = 3          # Number of objects to place
     SIMULATION_FRAMES = 60   # Physics simulation frames
+    OUTPUT_DIR = "H:\\code\\GraspGPT\\output\\synthetic_meshes"  # Directory to save final meshes
     
     # Execute simulation
     simulate_physics_drop(
@@ -240,5 +337,6 @@ if __name__ == "__main__":
         bbox_min=BBOX_MIN,
         bbox_max=BBOX_MAX,
         num_objects=NUM_OBJECTS,
-        simulation_frames=SIMULATION_FRAMES
+        simulation_frames=SIMULATION_FRAMES,
+        output_dir=OUTPUT_DIR
     )
