@@ -24,13 +24,14 @@ def create_bbox_walls(bbox_min, bbox_max):
     bpy.ops.mesh.primitive_cube_add(size=2)
     floor = bpy.context.active_object
     floor.name = "Floor"
-    floor.scale = ((bbox_max[0] - bbox_min[0])/2, (bbox_max[1] - bbox_min[1])/2, 0.1)
-    floor.location = ((bbox_max[0] + bbox_min[0])/2, (bbox_max[1] + bbox_min[1])/2, bbox_min[2] - 0.1)
+    floor.scale = ((bbox_max[0] - bbox_min[0])/2, (bbox_max[1] - bbox_min[1])/2, 0.2)
+    floor.location = ((bbox_max[0] + bbox_min[0])/2, (bbox_max[1] + bbox_min[1])/2, bbox_min[2] - 0.2)
     
     # Set as rigid body
     bpy.context.view_layer.objects.active = floor
     bpy.ops.rigidbody.object_add(type='PASSIVE')
     floor.rigid_body.type = 'PASSIVE'
+
     walls.append(floor)
     
     # Create four walls
@@ -49,6 +50,8 @@ def create_bbox_walls(bbox_min, bbox_max):
         bpy.context.view_layer.objects.active = wall
         bpy.ops.rigidbody.object_add(type='PASSIVE')
         wall.rigid_body.type = 'PASSIVE'
+        wall.hide_render = True
+        wall.hide_viewport = True
         walls.append(wall)
     
     # Two walls in Y direction
@@ -63,6 +66,8 @@ def create_bbox_walls(bbox_min, bbox_max):
         bpy.context.view_layer.objects.active = wall
         bpy.ops.rigidbody.object_add(type='PASSIVE')
         wall.rigid_body.type = 'PASSIVE'
+        wall.hide_render = True
+        wall.hide_viewport = True
         walls.append(wall)
     
     return walls
@@ -85,6 +90,12 @@ def setup_physics_world():
     # Set time scale
     if hasattr(rbw, 'time_scale'):
         rbw.time_scale = 1.0
+    
+    # Improve solver settings to reduce jittering
+    if hasattr(rbw, 'solver_iterations'):
+        rbw.solver_iterations = 20  # Increase solver iterations
+    if hasattr(rbw, 'steps_per_second'):
+        rbw.steps_per_second = 120  # Increase simulation steps
 
 def add_physics_to_object(obj, mass=1.0):
     """Add rigid body physics to object"""
@@ -93,13 +104,24 @@ def add_physics_to_object(obj, mass=1.0):
     obj.rigid_body.type = 'ACTIVE'
     obj.rigid_body.mass = mass
     obj.rigid_body.collision_shape = 'CONVEX_HULL'
-    obj.rigid_body.friction = 0.5
-    obj.rigid_body.restitution = 0.3
+    obj.rigid_body.friction = 0.8  # Increase friction to reduce sliding
+    obj.rigid_body.restitution = 0.1  # Reduce bounce to prevent jittering
+    
+    # Add damping to reduce oscillations
+    obj.rigid_body.linear_damping = 0.1  # Linear damping
+    obj.rigid_body.angular_damping = 0.1  # Angular damping
+    
+    # Use better collision margins
+    obj.rigid_body.collision_margin = 0.001  # Smaller collision margin
+    
+    # Use mesh collision shape for better accuracy if needed
+    # Uncomment the next line for more accurate but slower collision detection
+    # obj.rigid_body.collision_shape = 'MESH'
 
-def get_random_position_in_bbox(bbox_min, bbox_max, drop_height_offset=2.0):
+def get_random_position_in_bbox(bbox_min, bbox_max, drop_height_offset=0.5):
     """Generate random position within bbox range, dropping from above"""
-    x = random.uniform(bbox_min[0] + 0.01, bbox_max[0] - 0.01)  # Leave boundary margin
-    y = random.uniform(bbox_min[1] + 0.01, bbox_max[1] - 0.01)  # Leave boundary margin
+    x = random.uniform(bbox_min[0] + 0.05, bbox_max[0] - 0.05)  # Leave boundary margin
+    y = random.uniform(bbox_min[1] + 0.05, bbox_max[1] - 0.05)  # Leave boundary margin
     z = bbox_max[2] + drop_height_offset  # Drop from above bbox top
     return Vector((x, y, z))
 
@@ -136,7 +158,7 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     
     # Get all PLY files
     #ply_files = glob.glob(os.path.join(ply_files_folder, "*.ply"))
-    ply_files = [os.path.join(ply_files_folder, '%03d'%f, 'nontextured.ply') for f in range(88)]
+    ply_files = [os.path.join(ply_files_folder, '%03d'%f, 'nontextured_simplified_blender_3.ply') for f in range(88)]
     if not ply_files:
         print("No PLY files found!")
         return
@@ -207,10 +229,10 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
 if __name__ == "__main__":
     # Configuration parameters
     PLY_FILES_FOLDER = "H:\\code\\GraspGPT\\data\\models"  # Replace with your PLY files path
-    BBOX_MIN = (-0.3, -0.2, 0)    # bbox minimum coordinates
-    BBOX_MAX = (0.3, 0.2, 0.3)      # bbox maximum coordinates
+    BBOX_MIN = (-0.27, -0.18, 0)    # bbox minimum coordinates
+    BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates
     NUM_OBJECTS = 3          # Number of objects to place
-    SIMULATION_FRAMES = 100   # Physics simulation frames
+    SIMULATION_FRAMES = 60   # Physics simulation frames
     
     # Execute simulation
     simulate_physics_drop(
