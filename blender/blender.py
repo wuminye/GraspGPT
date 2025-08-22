@@ -123,6 +123,7 @@ def setup_physics_world():
         bpy.ops.rigidbody.world_add()
     
     # Set gravity - handle different Blender versions
+    # Gravity points downward along Z-axis (negative Z direction in Z-up coordinate system)
     rbw = scene.rigidbody_world
     if hasattr(rbw, 'gravity'):
         rbw.gravity = (0, 0, -9.81)
@@ -238,7 +239,7 @@ def save_final_meshes(output_dir, imported_objects, object_ids, scene_id=0):
         # Export OBJ format only with scene ID
         obj_path = os.path.join(output_dir, f"scene_{scene_id:04d}.obj")
         
-        # Export OBJ with materials
+        # Export OBJ with materials, keeping Z-axis up
         bpy.ops.export_scene.obj(
             filepath=obj_path,
             use_selection=True,
@@ -247,7 +248,9 @@ def save_final_meshes(output_dir, imported_objects, object_ids, scene_id=0):
             use_uvs=False,
             use_materials=True,
             use_vertex_groups=False,
-            global_scale=1.0
+            global_scale=1.0,
+            axis_forward='-Y',
+            axis_up='Z'
         )
         
         print(f"Saved {len(valid_objects)} objects to {output_dir}")
@@ -268,6 +271,9 @@ def simulate_physics_drop_with_preloaded(preloaded_meshes, bbox_min, bbox_max, s
     - output_dir: Directory to save final meshes (optional)
     - scene_id: Scene identifier for naming
     """
+
+    # Clear scene for next simulation
+    clear_scene()
     
     print(f"Generating scene {scene_id} with {len(selected_objects)} objects")
     
@@ -338,8 +344,7 @@ def simulate_physics_drop_with_preloaded(preloaded_meshes, bbox_min, bbox_max, s
     print(f"Successfully imported and simulated {len(imported_objects)} objects")
     print("Final geometry preserved - objects will maintain their settled positions")
     
-    # Clear scene for next simulation
-    clear_scene()
+
 
 def generate_multiple_scenes(ply_files_folder, bbox_min, bbox_max, num_scenes=10, simulation_frames=60, output_dir=None):
     """Generate multiple random scenes with varying object counts"""
@@ -385,8 +390,8 @@ def generate_multiple_scenes(ply_files_folder, bbox_min, bbox_max, num_scenes=10
 if __name__ == "__main__":
     # Configuration parameters
     PLY_FILES_FOLDER = "H:\\code\\GraspGPT\\data\\models"  # Replace with your PLY files path
-    BBOX_MIN = (-0.27, -0.18, 0)    # bbox minimum coordinates
-    BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates
+    BBOX_MIN = (-0.27, -0.18, 0)    # bbox minimum coordinates (Z-axis up coordinate system)
+    BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates (Z-axis up coordinate system)
     NUM_SCENES = 2000          # Number of scenes to generate
     SIMULATION_FRAMES = 60   # Physics simulation frames
     OUTPUT_DIR = "H:\\code\\GraspGPT\\output\\synthetic_meshes"  # Directory to save final meshes
