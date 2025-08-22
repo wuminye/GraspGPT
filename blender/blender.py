@@ -28,6 +28,36 @@ def import_ply_file(filepath):
     bpy.ops.import_mesh.ply(filepath=filepath)
     return bpy.context.active_object
 
+def preload_all_objects(ply_files_folder):
+    """Preload all 88 objects into memory and return dictionary of meshes"""
+    print("Preloading all 88 objects into memory...")
+    preloaded_meshes = {}
+    
+    for model_id in range(88):
+        ply_file = os.path.join(ply_files_folder, f'{model_id:03d}', 'nontextured_simplified_blender_3.ply')
+        if os.path.exists(ply_file):
+            # Import object temporarily
+            obj = import_ply_file(ply_file)
+            if obj and obj.data:
+                # Store mesh data
+                mesh_copy = obj.data.copy()
+                mesh_copy.name = f"mesh_{model_id:03d}"
+                preloaded_meshes[model_id] = mesh_copy
+                print(f"Loaded object {model_id:03d}")
+                
+                # Remove the temporary object
+                bpy.data.objects.remove(obj, do_unlink=True)
+    
+    print(f"Successfully preloaded {len(preloaded_meshes)} objects")
+    return preloaded_meshes
+
+def create_object_from_mesh(mesh_data, model_id):
+    """Create a new object from preloaded mesh data"""
+    # Create object from mesh
+    obj = bpy.data.objects.new(f"object_{model_id:03d}", mesh_data)
+    bpy.context.collection.objects.link(obj)
+    return obj
+
 def create_bbox_walls(bbox_min, bbox_max):
     """Create bbox boundary walls as collision boundaries"""
     walls = []
@@ -156,7 +186,6 @@ def remove_physics_from_objects(objects):
 def set_object_color_by_id(obj, model_id):
     """Set material color based on model ID"""
     # Generate color based on model ID
-    random.seed(model_id)  # Ensure consistent colors for same ID
     color = (model_id/255.0, model_id/255.0, model_id/255.0, 1.0)
     
     # Create or get material
@@ -175,7 +204,7 @@ def set_object_color_by_id(obj, model_id):
     else:
         obj.data.materials.append(material)
 
-def save_final_meshes(output_dir, imported_objects, object_ids):
+def save_final_meshes(output_dir, imported_objects, object_ids, scene_id=0):
     """Save final frame meshes to target directory, excluding walls and floors"""
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -206,8 +235,8 @@ def save_final_meshes(output_dir, imported_objects, object_ids):
         # Set one of the objects as active
         bpy.context.view_layer.objects.active = valid_objects[0]
         
-        # Export OBJ format only
-        obj_path = os.path.join(output_dir, "final_scene.obj")
+        # Export OBJ format only with scene ID
+        obj_path = os.path.join(output_dir, f"scene_{scene_id:04d}.obj")
         
         # Export OBJ with materials
         bpy.ops.export_scene.obj(
@@ -226,30 +255,21 @@ def save_final_meshes(output_dir, imported_objects, object_ids):
     # Clear selection
     bpy.ops.object.select_all(action='DESELECT')
 
-def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, simulation_frames=250, output_dir=None):
+def simulate_physics_drop_with_preloaded(preloaded_meshes, bbox_min, bbox_max, selected_objects, simulation_frames=250, output_dir=None, scene_id=0):
     """
-    Main function: Load PLY files and perform physics simulation
+    Main function: Perform physics simulation with preloaded objects
     
     Parameters:
-    - ply_files_folder: Path to folder containing PLY files
+    - preloaded_meshes: Dictionary of preloaded mesh data
     - bbox_min: bbox minimum coordinates (x, y, z)
     - bbox_max: bbox maximum coordinates (x, y, z)  
-    - num_objects: Number of objects to place
+    - selected_objects: List of model IDs to use in this scene
     - simulation_frames: Number of frames for physics simulation
     - output_dir: Directory to save final meshes (optional)
+    - scene_id: Scene identifier for naming
     """
     
-    # Clear scene
-    clear_scene()
-    
-    # Get all PLY files
-    #ply_files = glob.glob(os.path.join(ply_files_folder, "*.ply"))
-    ply_files = [os.path.join(ply_files_folder, '%03d'%f, 'nontextured_simplified_blender_3.ply') for f in range(88)]
-    if not ply_files:
-        print("No PLY files found!")
-        return
-    
-    print(f"Found {len(ply_files)} PLY files")
+    print(f"Generating scene {scene_id} with {len(selected_objects)} objects")
     
     # Setup physics world
     setup_physics_world()
@@ -258,38 +278,35 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     walls = create_bbox_walls(Vector(bbox_min), Vector(bbox_max))
     print("Created bbox boundary walls")
     
-    # Randomly select and import PLY files
-    selected_files = random.sample(ply_files, min(num_objects, len(ply_files)))
+    # Create objects from preloaded meshes
     imported_objects = []
-    object_ids = []  # Track model IDs
+    object_ids = selected_objects.copy()
     
-    for i, ply_file in enumerate(selected_files):
-        print(f"Importing object {i+1}: {os.path.basename(ply_file)}")
+    for i, model_id in enumerate(selected_objects):
+        print(f"Creating object {i+1}: model {model_id:03d}")
         
-        # Extract model ID from file path (assuming format like '000/nontextured_simplified_blender_3.ply')
-        model_id = int(os.path.basename(os.path.dirname(ply_file)))
-        object_ids.append(model_id)
-        
-        # Import PLY file
-        obj = import_ply_file(ply_file)
-        if obj:
-            # Set random position
-            drop_position = get_random_position_in_bbox(Vector(bbox_min), Vector(bbox_max))
-            obj.location = drop_position
+        # Create object from preloaded mesh
+        if model_id in preloaded_meshes:
+            obj = create_object_from_mesh(preloaded_meshes[model_id], model_id)
             
-            # Random rotation
-            obj.rotation_euler = (
-                random.uniform(0, 6.28),  # 0 to 2π
-                random.uniform(0, 6.28),
-                random.uniform(0, 6.28)
-            )
-            
-            # Add physics properties
-            add_physics_to_object(obj, mass=random.uniform(0.5, 2.0))
-            imported_objects.append(obj)
-            
-            # Slight delay after importing each object to avoid simultaneous dropping
-            bpy.context.scene.frame_set(i * 10)
+            if obj:
+                # Set random position
+                drop_position = get_random_position_in_bbox(Vector(bbox_min), Vector(bbox_max))
+                obj.location = drop_position
+                
+                # Random rotation
+                obj.rotation_euler = (
+                    random.uniform(0, 6.28),  # 0 to 2π
+                    random.uniform(0, 6.28),
+                    random.uniform(0, 6.28)
+                )
+                
+                # Add physics properties
+                add_physics_to_object(obj, mass=random.uniform(0.5, 2.0))
+                imported_objects.append(obj)
+                
+                # Slight delay after importing each object to avoid simultaneous dropping
+                bpy.context.scene.frame_set(i * 10)
     
     # Run physics simulation
     print(f"Starting physics simulation for {simulation_frames} frames...")
@@ -315,11 +332,54 @@ def simulate_physics_drop(ply_files_folder, bbox_min, bbox_max, num_objects=10, 
     # Save final meshes if output directory is specified
     if output_dir:
         print(f"Saving final meshes to {output_dir}...")
-        save_final_meshes(output_dir, imported_objects, object_ids)
+        save_final_meshes(output_dir, imported_objects, object_ids, scene_id)
     
     print("Physics simulation completed!")
     print(f"Successfully imported and simulated {len(imported_objects)} objects")
     print("Final geometry preserved - objects will maintain their settled positions")
+    
+    # Clear scene for next simulation
+    clear_scene()
+
+def generate_multiple_scenes(ply_files_folder, bbox_min, bbox_max, num_scenes=10, simulation_frames=60, output_dir=None):
+    """Generate multiple random scenes with varying object counts"""
+    print(f"Starting generation of {num_scenes} scenes...")
+    
+    # Preload all objects once
+    preloaded_meshes = preload_all_objects(ply_files_folder)
+    available_objects = list(preloaded_meshes.keys())
+    
+    if not available_objects:
+        print("No objects were loaded!")
+        return
+    
+    # Generate each scene
+    for scene_id in range(num_scenes):
+        # Random number of objects (3-6)
+        num_objects = random.randint(3, 6)
+        
+        # Randomly select objects for this scene
+        selected_objects = random.sample(available_objects, min(num_objects, len(available_objects)))
+        
+        print(f"\n--- Scene {scene_id + 1}/{num_scenes} ---")
+        print(f"Objects: {selected_objects}")
+        
+        # Run simulation for this scene
+        simulate_physics_drop_with_preloaded(
+            preloaded_meshes=preloaded_meshes,
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            selected_objects=selected_objects,
+            simulation_frames=simulation_frames,
+            output_dir=output_dir,
+            scene_id=scene_id
+        )
+    
+    print(f"\nCompleted generation of {num_scenes} scenes!")
+    
+    # Clean up preloaded meshes
+    for mesh in preloaded_meshes.values():
+        bpy.data.meshes.remove(mesh, do_unlink=True)
 
 # Example usage
 if __name__ == "__main__":
@@ -327,16 +387,16 @@ if __name__ == "__main__":
     PLY_FILES_FOLDER = "H:\\code\\GraspGPT\\data\\models"  # Replace with your PLY files path
     BBOX_MIN = (-0.27, -0.18, 0)    # bbox minimum coordinates
     BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates
-    NUM_OBJECTS = 3          # Number of objects to place
+    NUM_SCENES = 2000          # Number of scenes to generate
     SIMULATION_FRAMES = 60   # Physics simulation frames
     OUTPUT_DIR = "H:\\code\\GraspGPT\\output\\synthetic_meshes"  # Directory to save final meshes
     
-    # Execute simulation
-    simulate_physics_drop(
+    # Execute multiple scene generation
+    generate_multiple_scenes(
         ply_files_folder=PLY_FILES_FOLDER,
         bbox_min=BBOX_MIN,
         bbox_max=BBOX_MAX,
-        num_objects=NUM_OBJECTS,
+        num_scenes=NUM_SCENES,
         simulation_frames=SIMULATION_FRAMES,
         output_dir=OUTPUT_DIR
     )
