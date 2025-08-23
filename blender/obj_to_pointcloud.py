@@ -10,6 +10,9 @@ import os
 from pathlib import Path
 import re
 from typing import Dict, List, Tuple, Optional
+import torch
+from multiprocessing import Pool, cpu_count
+import trimesh
 
 def parse_mtl_file(mtl_path: str) -> Dict[str, np.ndarray]:
     """Parse MTL file and extract material colors (Kd - diffuse color)"""
@@ -30,63 +33,77 @@ def parse_mtl_file(mtl_path: str) -> Dict[str, np.ndarray]:
     
     return materials
 
-def load_obj_with_materials(obj_path: str, mtl_path: str) -> o3d.geometry.TriangleMesh:
-    """Load OBJ file with material information and create colored mesh"""
-    # Parse materials
-    materials = parse_mtl_file(mtl_path)
-    print(f"Found {len(materials)} materials: {list(materials.keys())}")
+def load_obj_with_materials_trimesh(obj_path: str) -> List[Tuple[trimesh.Trimesh, np.ndarray]]:
+    """Load OBJ with materials using trimesh"""
+    scene = trimesh.load(obj_path)
     
-    # Load mesh using Open3D
-    mesh = o3d.io.read_triangle_mesh(obj_path)
+    meshes_with_colors = []
     
-    if len(mesh.vertices) == 0:
-        raise ValueError(f"Failed to load mesh from {obj_path}")
-    
-    print(f"Loaded mesh with {len(mesh.vertices)} vertices and {len(mesh.triangles)} triangles")
-    
-    # Parse OBJ file to get material assignments for faces
-    face_materials = []
-    current_material = None
-    
-    with open(obj_path, 'r') as f:
-        face_count = 0
-        for line in f:
-            line = line.strip()
-            if line.startswith('usemtl '):
-                current_material = line.split(' ', 1)[1]
-            elif line.startswith('f '):
-                # Found a face, assign current material
-                face_materials.append(current_material)
-                face_count += 1
-    
-    print(f"Found {face_count} faces with material assignments")
-    
-    # Assign colors to vertices based on face materials
-    if len(face_materials) > 0 and len(materials) > 0:
-        vertex_colors = np.zeros((len(mesh.vertices), 3))
-        triangle_array = np.asarray(mesh.triangles)
-        
-        # For each triangle, assign material color to its vertices
-        for face_idx, material_name in enumerate(face_materials):
-            if face_idx < len(triangle_array) and material_name in materials:
-                color = materials[material_name]
-                # Get vertex indices for this triangle
-                vertex_indices = triangle_array[face_idx]
-                # Assign color to all vertices of this triangle
-                for v_idx in vertex_indices:
-                    vertex_colors[v_idx] = color
-
-
-        
-        # Set colors to mesh
-        mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
-        print(f"Applied colors to mesh vertices")
+    if isinstance(scene, trimesh.Scene):
+        # Handle multi-mesh scene
+        for name, mesh in scene.geometry.items():
+            if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material'):
+                if hasattr(mesh.visual.material, 'diffuse'):
+                    # Get material color (RGBA -> RGB, normalize to [0,1])
+                    diffuse = mesh.visual.material.diffuse
+                    if len(diffuse) >= 3:
+                        color = diffuse[:3] / 255.0 if diffuse.max() > 1.0 else diffuse[:3]
+                    else:
+                        color = np.array([0.5, 0.5, 0.5])
+                else:
+                    color = np.array([0.5, 0.5, 0.5])
+            else:
+                color = np.array([0.5, 0.5, 0.5])
+            
+            meshes_with_colors.append((mesh, color))
     else:
-        print("Warning: No materials or face assignments found, using default gray color")
-        # Default gray color
-        default_color = np.array([0.5, 0.5, 0.5])
-        vertex_colors = np.tile(default_color, (len(mesh.vertices), 1))
-        mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
+        # Single mesh
+        if hasattr(scene, 'visual') and hasattr(scene.visual, 'material'):
+            if hasattr(scene.visual.material, 'diffuse'):
+                diffuse = scene.visual.material.diffuse
+                if len(diffuse) >= 3:
+                    color = diffuse[:3] / 255.0 if diffuse.max() > 1.0 else diffuse[:3]
+                else:
+                    color = np.array([0.5, 0.5, 0.5])
+            else:
+                color = np.array([0.5, 0.5, 0.5])
+        else:
+            color = np.array([0.5, 0.5, 0.5])
+        
+        meshes_with_colors.append((scene, color))
+    
+    return meshes_with_colors
+
+def trimesh_to_open3d_with_colors(meshes_with_colors: List[Tuple[trimesh.Trimesh, np.ndarray]]) -> o3d.geometry.TriangleMesh:
+    """Convert trimesh meshes with colors to a single Open3D mesh"""
+    all_vertices = []
+    all_triangles = []
+    all_colors = []
+    vertex_offset = 0
+    
+    for trimesh_mesh, color in meshes_with_colors:
+        vertices = trimesh_mesh.vertices
+        triangles = trimesh_mesh.faces + vertex_offset
+        
+        # Create vertex colors for this mesh
+        vertex_colors = np.tile(color, (len(vertices), 1))
+        
+        all_vertices.append(vertices)
+        all_triangles.append(triangles)
+        all_colors.append(vertex_colors)
+        
+        vertex_offset += len(vertices)
+    
+    # Combine all meshes
+    combined_vertices = np.vstack(all_vertices)
+    combined_triangles = np.vstack(all_triangles)
+    combined_colors = np.vstack(all_colors)
+    
+    # Create Open3D mesh
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(combined_vertices)
+    mesh.triangles = o3d.utility.Vector3iVector(combined_triangles)
+    mesh.vertex_colors = o3d.utility.Vector3dVector(combined_colors)
     
     return mesh
 
@@ -97,10 +114,10 @@ def mesh_to_point_cloud_with_sampling(mesh: o3d.geometry.TriangleMesh,
     pcd = mesh.sample_points_uniformly(number_of_points=num_points)
     
     # If mesh has vertex colors, interpolate colors for sampled points
-    if len(mesh.vertex_colors) > 0:
-        print(f"Sampled {len(pcd.points)} points with colors from mesh")
-    else:
-        print(f"Sampled {len(pcd.points)} points without colors")
+    #if len(mesh.vertex_colors) > 0:
+    #    print(f"Sampled {len(pcd.points)} points with colors from mesh")
+    #else:
+    #    print(f"Sampled {len(pcd.points)} points without colors")
     
     return pcd
 
@@ -115,15 +132,15 @@ def check_points_in_bbox(points: np.ndarray, bbox_min: np.ndarray, bbox_max: np.
             points_outside.append((i, point))
     
     if points_outside:
-        print(f"⚠️  WARNING: {len(points_outside)} points outside bbox in {scene_name}!")
-        print(f"   BBox: min={bbox_min}, max={bbox_max}")
-        for i, (idx, point) in enumerate(points_outside[:5]):  # Show first 5 outside points
-            print(f"   Point {idx}: {point}")
-        if len(points_outside) > 5:
-            print(f"   ... and {len(points_outside) - 5} more points outside bbox")
+        #print(f"⚠️  WARNING: {len(points_outside)} points outside bbox in {scene_name}!")
+        #print(f"   BBox: min={bbox_min}, max={bbox_max}")
+        #for i, (idx, point) in enumerate(points_outside[:5]):  # Show first 5 outside points
+        #    print(f"   Point {idx}: {point}")
+        #if len(points_outside) > 5:
+        #    print(f"   ... and {len(points_outside) - 5} more points outside bbox")
         return False
     else:
-        print(f"✓ All {len(points)} points are within bbox bounds")
+        #print(f"✓ All {len(points)} points are within bbox bounds")
         return True
 
 def filter_points_by_bbox(pcd: o3d.geometry.PointCloud, bbox_min: np.ndarray, bbox_max: np.ndarray) -> o3d.geometry.PointCloud:
@@ -149,8 +166,8 @@ def filter_points_by_bbox(pcd: o3d.geometry.PointCloud, bbox_min: np.ndarray, bb
         filtered_pcd.colors = o3d.utility.Vector3dVector(filtered_colors)
     
     removed_count = len(points) - len(filtered_points)
-    if removed_count > 0:
-        print(f"   Filtered out {removed_count} points outside bbox")
+    #if removed_count > 0:
+    #    print(f"   Filtered out {removed_count} points outside bbox")
     
     return filtered_pcd
 
@@ -175,6 +192,8 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
         # Use default gray color if no colors
         colors = np.full((len(points), 3), 127.0)  # Gray color
         has_colors = True
+
+
 
     # Use bbox to determine voxel grid origin if provided
     if bbox_min is not None:
@@ -236,88 +255,97 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
     
     return downsampled_pcd, voxel_coordinates
 
-def save_voxel_coordinates_to_txt(voxel_coordinates: List[Tuple], colors: np.ndarray, 
-                                 output_path: str, bbox_min: np.ndarray, bbox_max: np.ndarray, 
-                                 voxel_size: float) -> None:
-    """Save voxel coordinates and colors to txt file"""
-    # Calculate volume dimensions
-    volume_size = bbox_max - bbox_min
-    volume_dims = np.ceil(volume_size / voxel_size).astype(int)
+def create_voxel_data_list(voxel_coordinates: List[Tuple], colors: np.ndarray) -> List[Tuple]:
+    """Create list of (color_255, coordinates_tensor) tuples from voxel data"""
+    # Create data array for sorting
+    data_list = []
+    for voxel_coord, color in zip(voxel_coordinates, colors):
+        # Convert color from [0,1] to [0,255] range
+        color_255 = np.round(color * 255.0).astype(int)
+        data_list.append({
+            'coord': voxel_coord,
+            'color_255': color_255[0]
+        })
     
-    with open(output_path, 'w') as f:
-        # Write header with volume information
-        f.write(f"# Volume dimensions (voxels): {volume_dims[0]} {volume_dims[1]} {volume_dims[2]}\n")
-        f.write(f"# Voxel size: {voxel_size}\n")
-        f.write(f"# BBox min: {bbox_min[0]} {bbox_min[1]} {bbox_min[2]}\n")
-        f.write(f"# BBox max: {bbox_max[0]} {bbox_max[1]} {bbox_max[2]}\n")
-        f.write(f"# Format: voxel_x voxel_y voxel_z color_r color_g color_b\n")
+    # Group by color
+    color_groups = {}
+    for data in data_list:
+        color_255 = data['color_255']
+        coord = data['coord']
         
-        # Write voxel data
-        for i, (voxel_coord, color) in enumerate(zip(voxel_coordinates, colors)):
-            # Convert color from [0,1] to [0,255] range
-            color_255 = np.round(color * 255.0).astype(int)
-            f.write(f"{voxel_coord[0]} {voxel_coord[1]} {voxel_coord[2]} {color_255[0]}\n")
+        if color_255 not in color_groups:
+            color_groups[color_255] = []
+        color_groups[color_255].append(coord)
+
+
+    
+    # Sort coordinates within each color group and create result list
+    result_list = []
+    for color_255 in sorted(color_groups.keys()):
+        coords = color_groups[color_255]
+        # Sort coordinates by (x, y, z)
+        coords.sort(key=lambda x: (x[0], x[1], x[2]))
+        # Convert to tensor
+        coord_tensor = torch.tensor(coords, dtype=torch.int32)
+        result_list.append((color_255, coord_tensor))
+    
+    return result_list
+
+def process_single_obj(args) -> Tuple[str, Optional[List[Tuple]]]:
+    """Wrapper function for multiprocessing - processes a single OBJ file"""
+    obj_path, output_dir, bbox_min, bbox_max, voxel_size, sample_points = args
+    result = process_obj_scene(obj_path, output_dir, bbox_min, bbox_max, voxel_size, sample_points)
+    return (obj_path, result)
 
 def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox_max: np.ndarray,
-                     voxel_size: float = 0.01, sample_points: int = 100000) -> bool:
-    """Process a single OBJ scene and save as colored point cloud"""
+                     voxel_size: float = 0.01, sample_points: int = 100000) -> Optional[List[Tuple]]:
+    """Process a single OBJ scene and return voxel data as list of (color, coordinates_tensor) tuples"""
     obj_path = Path(obj_path)
     mtl_path = obj_path.with_suffix('.mtl')
     
     if not mtl_path.exists():
         print(f"Warning: MTL file not found: {mtl_path}")
-        return False
+        return None
     
     try:
         print(f"\nProcessing: {obj_path.name}")
         
-        # Load OBJ with materials
-        mesh = load_obj_with_materials(str(obj_path), str(mtl_path))
+        # Load OBJ with materials using trimesh
+        meshes_with_colors = load_obj_with_materials_trimesh(str(obj_path))
+        
+        # Convert to single Open3D mesh
+        mesh = trimesh_to_open3d_with_colors(meshes_with_colors)
         
         # Convert to point cloud
         pcd = mesh_to_point_cloud_with_sampling(mesh, sample_points)
-        print(f"Generated point cloud with {len(pcd.points)} points")
+        #print(f"Generated point cloud with {len(pcd.points)} points")
         
-        # Save original sampled point cloud
-        original_pcd_path = Path(output_dir) / f"{obj_path.stem}_sampled.ply"
-        o3d.io.write_point_cloud(str(original_pcd_path), pcd)
-        print(f"Saved sampled point cloud: {original_pcd_path}")
+
         
         # Check if points are within bbox before voxelization
         points = np.asarray(pcd.points)
-        print(f"Checking if points are within bbox for {obj_path.name}...")
         all_within_bbox = check_points_in_bbox(points, bbox_min, bbox_max, obj_path.name)
         
         if not all_within_bbox:
-            print(f"⚠️  Some points in {obj_path.name} are outside the expected bbox!")
-            print(f"   Filtering points to keep only those within bbox...")
             pcd = filter_points_by_bbox(pcd, bbox_min, bbox_max)
-            print(f"   Point cloud now has {len(pcd.points)} points within bbox")
         
         # Apply voxel downsampling with bbox
         downsampled_pcd, voxel_coordinates = voxel_downsample_with_colors(pcd, voxel_size, bbox_min, bbox_max)
-        print(f"Downsampled to {len(downsampled_pcd.points)} points using {voxel_size}m voxels")
         
-        # Save point cloud
+        # Save point cloud (optional)
         output_path = Path(output_dir) / f"{obj_path.stem}_pointcloud.ply"
-        success = o3d.io.write_point_cloud(str(output_path), downsampled_pcd)
+        o3d.io.write_point_cloud(str(output_path), downsampled_pcd)
         
-        # Save voxel coordinates to txt file
-        txt_output_path = Path(output_dir) / f"{obj_path.stem}_voxels.txt"
+        # Create data list from voxel data
         colors = np.asarray(downsampled_pcd.colors) if len(downsampled_pcd.colors) > 0 else np.full((len(voxel_coordinates), 3), 0.5)
-        save_voxel_coordinates_to_txt(voxel_coordinates, colors, str(txt_output_path), bbox_min, bbox_max, voxel_size)
+        data_list = create_voxel_data_list(voxel_coordinates, colors)
         
-        if success:
-            print(f"Saved colored point cloud: {output_path}")
-            print(f"Saved voxel coordinates: {txt_output_path}")
-            return True
-        else:
-            print(f"Failed to save: {output_path}")
-            return False
+        print(f"Created data list with {len(data_list)} color groups {obj_path.name}")
+        return data_list
             
     except Exception as e:
         print(f"Error processing {obj_path.name}: {e}")
-        return False
+        return None
 
 def main():
     # Configuration - use bbox from blender.py
@@ -325,6 +353,7 @@ def main():
     output_dir = "../output/pointclouds"
     voxel_size = 0.01  # 1cm voxels
     sample_points = 10000  # Number of points to sample from each mesh
+    use_multiprocessing = True  # Switch to enable/disable multiprocessing
     
     # BBox definition from blender.py (Z-axis up coordinate system)
     BBOX_MIN = np.array([-0.27, -0.18, 0])    # bbox minimum coordinates (Z-up)
@@ -344,17 +373,50 @@ def main():
     obj_files = list(Path(input_dir).glob("*.obj"))
     print(f"Found {len(obj_files)} OBJ files to process")
     
-    # Process each OBJ file
-    success_count = 0
+    # Prepare arguments for multiprocessing
+    args_list = []
     for obj_path in sorted(obj_files):
-        if process_obj_scene(str(obj_path), output_dir, BBOX_MIN, BBOX_MAX, voxel_size, sample_points):
-            success_count += 1
-        break
+        args_list.append((str(obj_path), output_dir, BBOX_MIN, BBOX_MAX, voxel_size, sample_points))
         
+   
     
-    print(f"\nProcessing complete!")
+    all_data_lists = []
+    success_count = 0
+    
+    if use_multiprocessing:
+        # Use multiprocessing to process files in parallel
+        num_processes = min(cpu_count(), len(args_list))
+        print(f"Using {num_processes} processes for parallel processing")
+        
+        with Pool(processes=num_processes) as pool:
+            results = pool.map(process_single_obj, args_list)
+            
+            for obj_path, data_list in results:
+                if data_list is not None:
+                    all_data_lists.append(data_list)
+                    success_count += 1
+                else:
+                    print(f"Failed to process: {obj_path}")
+    else:
+        # Single-threaded processing
+        print("Using single-threaded processing")
+        
+        for args in args_list:
+            obj_path, data_list = process_single_obj(args)
+            if data_list is not None:
+                all_data_lists.append(data_list)
+                success_count += 1
+            else:
+                print(f"Failed to process: {obj_path}")
+        
+    # Save all data lists to a single pth file
+    if all_data_lists:
+        pth_output_path = Path(output_dir) / "all_voxel_data.pth"
+        torch.save(all_data_lists, str(pth_output_path))
+        print(f"\nSaved {len(all_data_lists)} data lists to: {pth_output_path}")
+    
+    print(f"Processing complete!")
     print(f"Successfully processed {success_count}/{len(obj_files)} files")
-    print(f"Colored point clouds saved in: {output_dir}")
 
 if __name__ == "__main__":
     main()
