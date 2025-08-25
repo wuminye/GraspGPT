@@ -333,8 +333,8 @@ def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox
         downsampled_pcd, voxel_coordinates = voxel_downsample_with_colors(pcd, voxel_size, bbox_min, bbox_max)
         
         # Save point cloud (optional)
-        output_path = Path(output_dir) / f"{obj_path.stem}_pointcloud.ply"
-        o3d.io.write_point_cloud(str(output_path), downsampled_pcd)
+        #output_path = Path(output_dir) / f"{obj_path.stem}_pointcloud.ply"
+        #o3d.io.write_point_cloud(str(output_path), downsampled_pcd)
         
         # Create data list from voxel data
         colors = np.asarray(downsampled_pcd.colors) if len(downsampled_pcd.colors) > 0 else np.full((len(voxel_coordinates), 3), 0.5)
@@ -412,7 +412,14 @@ def main():
     # Save all data lists to a single pth file
     if all_data_lists:
         pth_output_path = Path(output_dir) / "all_voxel_data.pth"
-        torch.save(all_data_lists, str(pth_output_path))
+        data_out = {
+            'voxel_size': voxel_size,
+            'bbox_min': BBOX_MIN,
+            'bbox_max': BBOX_MAX,
+            'volume_dims': volume_dims,
+            'data_lists': all_data_lists
+        }
+        torch.save(data_out, str(pth_output_path))
         print(f"\nSaved {len(all_data_lists)} data lists to: {pth_output_path}")
     
     print(f"Processing complete!")

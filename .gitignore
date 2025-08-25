@@ -2,3 +2,5 @@
 /output
 /submodule
 *.ply
+/graspGPT/__pycache__
+/graspGPT/model/__pycache__
