@@ -56,13 +56,13 @@ def get_default_config():
     C.model.model_type = 'gpt-mini'  # or specify custom n_layer, n_head, n_embd
     C.model.vocab_size = None  # Will be set from dataset
     C.model.block_size = 4096   # Maximum sequence length
-    C.model.use_rope = False    # Use RoPE position encoding
+    C.model.use_rope = True    # Use RoPE position encoding
     C.model.use_flash_attention = True
     
     # Training configuration  
     C.trainer = Trainer.get_default_config()
     C.trainer.learning_rate = 3e-4
-    C.trainer.batch_size = 8
+    C.trainer.batch_size = 9
     C.trainer.max_iters = 100000
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
@@ -76,7 +76,7 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/pointclouds/all_voxel_data.pth"
-    C.dataset.max_sequence_length = 2096
+    C.dataset.max_sequence_length = 2196
     C.dataset.num_workers = 4
     C.dataset.weights_only = False
     

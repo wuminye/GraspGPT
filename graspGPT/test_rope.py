@@ -34,7 +34,7 @@ def test_rope_model():
     # Create test input
     batch_size = 2
     seq_len = 16
-    num_features = 3
+    num_features = 1
     
     # Test input format: (batch_size, seq_len, num_features)
     idx = torch.randint(0, config.vocab_size, (batch_size, seq_len, num_features))

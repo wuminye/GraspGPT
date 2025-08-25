@@ -176,9 +176,18 @@ class RoPEAttention(nn.Module):
         # Causal self-attention
         if self.flash:
             # Use Flash Attention if available
+            # Convert attention_mask from [B, T] to [B, 1, T, T] for scaled_dot_product_attention
+            attn_mask_4d = None
+            if attention_mask is not None:
+                # attention_mask is [B, T], convert to [B, 1, T, T]
+                attn_mask_4d = attention_mask.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, T]
+                attn_mask_4d = attn_mask_4d.expand(-1, -1, T, -1)  # [B, 1, T, T]
+                # Convert boolean mask to float mask for attention
+                attn_mask_4d = attn_mask_4d.float().masked_fill(~attn_mask_4d.bool(), float('-inf'))
+            
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, 
-                attn_mask=attention_mask, 
+                attn_mask=attn_mask_4d, 
                 dropout_p=self.dropout if self.training else 0,
                 is_causal=True
             )
@@ -609,6 +618,7 @@ class graspGPT(nn.Module):
             
             # Convert idx to token format for RoPE model
             input_ids = idx[..., 0].long()  # Use first feature as main input
+            
             
             # Forward through RoPE model
             logits, loss = self.model(input_ids, targets=targets[..., 0].long() if targets is not None else None, attention_mask=attention_mask)
