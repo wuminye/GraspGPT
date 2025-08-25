@@ -76,7 +76,7 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/pointclouds/all_voxel_data.pth"
-    C.dataset.max_sequence_length = 2196
+    C.dataset.max_sequence_length = 4096
     C.dataset.num_workers = 4
     C.dataset.weights_only = False
     
