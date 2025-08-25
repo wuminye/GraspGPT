@@ -56,6 +56,7 @@ def pad_collate(batch):
         
         x_batch[i, :seq_len] = x
         y_batch[i, :seq_len] = y  
+        y_batch[i, seq_len:] = -1
         att_batch[i, :seq_len] = att
 
     return x_batch, y_batch, att_batch

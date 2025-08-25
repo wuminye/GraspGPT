@@ -19,6 +19,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import wandb
 
 # Import local modules
 try:
@@ -61,7 +62,7 @@ def get_default_config():
     # Training configuration  
     C.trainer = Trainer.get_default_config()
     C.trainer.learning_rate = 3e-4
-    C.trainer.batch_size = 9
+    C.trainer.batch_size = 10
     C.trainer.max_iters = 100000
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
@@ -87,6 +88,14 @@ def get_default_config():
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
     
+    # Wandb configuration
+    C.wandb = CN()
+    C.wandb.enabled = True
+    C.wandb.project = 'graspgpt'
+    C.wandb.entity = None  # Set to your wandb username/team
+    C.wandb.name = None    # Run name, will be auto-generated if None
+    C.wandb.tags = []      # List of tags for the run
+    
     return C
 
 
@@ -95,6 +104,34 @@ def setup_logging(output_dir):
     os.makedirs(output_dir, exist_ok=True)
     log_file = os.path.join(output_dir, 'training.log')
     return log_file
+
+
+def setup_wandb(config):
+    """Initialize Weights & Biases logging"""
+    if not config.wandb.enabled:
+        return
+    
+    # Generate random name if not specified
+    run_name = config.wandb.name
+    if run_name is None:
+        import random
+        import string
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        run_name = f"graspgpt-{random_suffix}"
+    
+    wandb.init(
+        project=config.wandb.project,
+        entity=config.wandb.entity,
+        name=run_name,
+        tags=config.wandb.tags,
+        config={
+            'model': config.model,
+            'trainer': config.trainer,
+            'dataset': config.dataset,
+            'system': config.system
+        },
+        resume='allow'  # Allow resuming runs
+    )
 
 
 def log_message(message, log_file=None, print_to_console=True):
@@ -200,11 +237,21 @@ def create_callbacks(config, log_file):
         # Logging
         if trainer.iter_num % config.system.log_every == 0:
             lr = trainer._get_lr()
+            loss_value = trainer.loss.item()
             message = (f"Iter {trainer.iter_num:6d} | "
-                      f"Loss: {trainer.loss.item():.4f} | "
+                      f"Loss: {loss_value:.4f} | "
                       f"LR: {lr:.2e} | "
                       f"Time: {trainer.iter_dt*1000:.1f}ms")
             log_message(message, log_file)
+            
+            # Log to wandb
+            if config.wandb.enabled and wandb.run is not None:
+                wandb.log({
+                    'train/loss': loss_value,
+                    'train/learning_rate': lr,
+                    'train/iter_time_ms': trainer.iter_dt * 1000,
+                    'iteration': trainer.iter_num
+                }, step=trainer.iter_num)
         
         # Checkpointing
         if trainer.iter_num % config.system.save_every == 0:
@@ -260,6 +307,12 @@ def main():
                        help='Learning rate (overrides config)')
     parser.add_argument('--max_iters', type=int, default=None,
                        help='Maximum iterations (overrides config)')
+    parser.add_argument('--no_wandb', action='store_true',
+                       help='Disable wandb logging')
+    parser.add_argument('--wandb_project', type=str, default=None,
+                       help='Wandb project name (overrides config)')
+    parser.add_argument('--wandb_name', type=str, default=None,
+                       help='Wandb run name (overrides config)')
     
     args = parser.parse_args()
     
@@ -283,6 +336,12 @@ def main():
         config.trainer.learning_rate = args.learning_rate
     if args.max_iters:
         config.trainer.max_iters = args.max_iters
+    if args.no_wandb:
+        config.wandb.enabled = False
+    if args.wandb_project:
+        config.wandb.project = args.wandb_project
+    if args.wandb_name:
+        config.wandb.name = args.wandb_name
     
     # Set random seed for reproducibility
     torch.manual_seed(config.system.seed)
@@ -293,6 +352,9 @@ def main():
     log_file = setup_logging(config.system.output_dir)
     log_message("Starting GraspGPT training", log_file)
     log_message(f"Config: {config}", log_file)
+    
+    # Setup wandb
+    setup_wandb(config)
     
     try:
         # Create model and dataset
@@ -324,6 +386,8 @@ def main():
     except StopIteration as e:
         print(f"Training stopped: {e}")
         log_message(f"Training stopped: {e}", log_file)
+        if config.wandb.enabled and wandb.run is not None:
+            wandb.finish()
     except KeyboardInterrupt:
         print("\nTraining interrupted by user")
         log_message("Training interrupted by user", log_file)
@@ -339,6 +403,8 @@ def main():
                 config.system.output_dir
             )
             print(f"Interrupt checkpoint saved: {checkpoint_path}")
+        if config.wandb.enabled and wandb.run is not None:
+            wandb.finish()
     except Exception as e:
         error_msg = f"Training failed with error: {str(e)}"
         print(error_msg)
@@ -347,6 +413,10 @@ def main():
     
     print("Training script completed")
     log_message("Training script completed", log_file)
+    
+    # Close wandb run
+    if config.wandb.enabled and wandb.run is not None:
+        wandb.finish()
 
 
 if __name__ == "__main__":
