@@ -24,10 +24,11 @@ echo "Starting DeepSpeed training with $NUM_GPUS GPUs..."
 echo "Additional arguments: $@"
 
 # Run DeepSpeed training
+# batch_size will be automatically calculated based on micro_batch_size and world_size
 deepspeed --num_gpus=$NUM_GPUS train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
-    --batch_size 30 \
-    --micro_batch_size 9 \
+    --batch_size 32 \
+    --micro_batch_size 8 \
     --learning_rate 3e-4 \
     --max_iters 200000 \
     --wandb_project "graspgpt-deepspeed" \

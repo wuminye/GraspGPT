@@ -274,11 +274,31 @@ def create_deepspeed_config(config):
     with open(config.deepspeed.config_path, 'r') as f:
         ds_config = json.load(f)
     
+    # Calculate correct batch size parameters
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    
+    # Calculate gradient accumulation steps to achieve desired effective batch size
+    # effective_batch_size = micro_batch_size * gradient_accumulation_steps * world_size
+    gradient_accumulation_steps = max(1, config.trainer.batch_size // (config.trainer.micro_batch_size * world_size))
+    
+    # Recalculate actual train_batch_size based on the computed gradient_accumulation_steps
+    actual_train_batch_size = config.trainer.micro_batch_size * gradient_accumulation_steps * world_size
+    
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    if rank == 0:
+        print(f"DeepSpeed batch configuration:")
+        print(f"  World size: {world_size}")
+        print(f"  Micro batch size per GPU: {config.trainer.micro_batch_size}")
+        print(f"  Gradient accumulation steps: {gradient_accumulation_steps}")
+        print(f"  Effective train batch size: {actual_train_batch_size}")
+        if actual_train_batch_size != config.trainer.batch_size:
+            print(f"  Note: Adjusted from requested batch_size {config.trainer.batch_size} to {actual_train_batch_size}")
+    
     # Override with training configuration
     ds_config.update({
-        "train_batch_size": config.trainer.batch_size,
+        "train_batch_size": actual_train_batch_size,
         "train_micro_batch_size_per_gpu": config.trainer.micro_batch_size,
-        "gradient_accumulation_steps": config.trainer.batch_size // (config.trainer.micro_batch_size * dist.get_world_size()) if dist.is_initialized() else 1,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
         "gradient_clipping": config.trainer.grad_norm_clip,
     })
     

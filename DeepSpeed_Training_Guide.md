@@ -117,16 +117,24 @@ deepspeed --hostfile hostfile train_deepspeed.py \
 
 ## 性能优化建议
 
-### 1. 批次大小设置
+### 1. 批次大小设置（自动计算）
+
+训练脚本会自动计算正确的批次大小参数：
 
 ```python
-# 计算公式
-effective_batch_size = micro_batch_size × num_gpus × gradient_accumulation_steps
+# DeepSpeed要求：
+# train_batch_size = micro_batch_size × gradient_accumulation_steps × world_size
 
-# 示例：希望effective_batch_size=32，使用4块GPU
-# micro_batch_size=4, gradient_accumulation_steps=2
-# 32 = 4 × 4 × 2 ✓
+# 示例：使用2块GPU，micro_batch_size=8，期望batch_size=32
+# gradient_accumulation_steps = 32 / (8 × 2) = 2
+# 实际train_batch_size = 8 × 2 × 2 = 32 ✓
 ```
+
+**参数说明**：
+- `micro_batch_size`: 每个GPU的批次大小（根据GPU内存调整）
+- `batch_size`: 期望的全局批次大小（训练脚本会自动调整到最接近的可行值）
+- `gradient_accumulation_steps`: 自动计算
+- `world_size`: GPU数量（自动获取）
 
 ### 2. ZeRO优化阶段选择
 
