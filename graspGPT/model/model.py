@@ -582,6 +582,7 @@ class graspGPT(nn.Module):
     def configure_optimizers(self, train_config):
         """
         Use transformers' standard optimizer configuration
+        Compatible with both regular training and DeepSpeed
         """
         try:
             # Try to use transformers' built-in optimizer grouping
@@ -596,7 +597,7 @@ class graspGPT(nn.Module):
             optimizer = torch.optim.AdamW(
                 optimizer_grouped_parameters,
                 lr=train_config.learning_rate,
-                betas=train_config.betas
+                betas=getattr(train_config, 'betas', (0.9, 0.95))
             )
             
         except ImportError:
@@ -622,10 +623,49 @@ class graspGPT(nn.Module):
             optimizer = torch.optim.AdamW(
                 optimizer_groups,
                 lr=train_config.learning_rate,
-                betas=train_config.betas
+                betas=getattr(train_config, 'betas', (0.9, 0.95))
             )
         
         return optimizer
+    
+    def get_parameter_groups(self, train_config):
+        """
+        Get parameter groups for DeepSpeed optimizer configuration
+        Returns parameter groups that can be used by DeepSpeed
+        """
+        try:
+            # Try to use transformers' built-in optimizer grouping
+            from transformers.optimization import get_optimizer_grouped_parameters
+            
+            optimizer_grouped_parameters = get_optimizer_grouped_parameters(
+                self.model,
+                weight_decay=train_config.weight_decay,
+                learning_rate=train_config.learning_rate,
+            )
+            
+            return optimizer_grouped_parameters
+            
+        except ImportError:
+            # Fallback to manual parameter grouping if transformers function not available
+            decay_params = []
+            no_decay_params = []
+            
+            for name, param in self.named_parameters():
+                if param.requires_grad:
+                    # Apply weight decay to Linear weights only
+                    if 'weight' in name and any(layer in name for layer in ['linear', 'dense', 'c_fc', 'c_proj', 'c_attn']):
+                        decay_params.append(param)
+                    else:
+                        # No weight decay for biases, LayerNorm, Embedding, etc.
+                        no_decay_params.append(param)
+            
+            # Create optimizer groups
+            optimizer_groups = [
+                {"params": decay_params, "weight_decay": train_config.weight_decay},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ]
+            
+            return optimizer_groups
 
     def forward(self, idx, targets=None, attention_mask=None):
         """
