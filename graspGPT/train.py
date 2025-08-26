@@ -53,7 +53,7 @@ def get_default_config():
     
     # Model configuration
     C.model = graspGPT.get_default_config()
-    C.model.model_type = 'gpt-mini'  # or specify custom n_layer, n_head, n_embd
+    C.model.model_type = 'gpt-micro'  # or specify custom n_layer, n_head, n_embd
     C.model.vocab_size = None  # Will be set from dataset
     C.model.block_size = 4096   # Maximum sequence length
     C.model.use_rope = True    # Use RoPE position encoding
@@ -62,8 +62,8 @@ def get_default_config():
     # Training configuration  
     C.trainer = Trainer.get_default_config()
     C.trainer.learning_rate = 3e-4
-    C.trainer.batch_size = 14
-    C.trainer.max_iters = 100000
+    C.trainer.batch_size = 12
+    C.trainer.max_iters = 200000
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
     C.trainer.use_amp = False  # Mixed precision training
