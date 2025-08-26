@@ -380,50 +380,67 @@ def main():
         
    
     
-    all_data_lists = []
     success_count = 0
+    batch_size = 5000
+    batch_count = 0
+    total_files = len(args_list)
     
-    if use_multiprocessing:
-        # Use multiprocessing to process files in parallel
-        num_processes = min(cpu_count(), len(args_list))
-        print(f"Using {num_processes} processes for parallel processing")
+    # Process files in batches
+    for batch_start in range(0, total_files, batch_size):
+        batch_end = min(batch_start + batch_size, total_files)
+        current_batch_args = args_list[batch_start:batch_end]
+        current_batch_data = []
         
-        with Pool(processes=num_processes) as pool:
-            results = pool.map(process_single_obj, args_list)
+        print(f"\nProcessing batch {batch_count}: files {batch_start+1}-{batch_end} of {total_files}")
+        
+        if use_multiprocessing:
+            # Use multiprocessing to process current batch in parallel
+            num_processes = min(cpu_count(), len(current_batch_args))
+            print(f"Using {num_processes} processes for parallel processing")
             
-            for obj_path, data_list in results:
+            with Pool(processes=num_processes) as pool:
+                results = pool.map(process_single_obj, current_batch_args)
+                
+                for obj_path, data_list in results:
+                    if data_list is not None:
+                        current_batch_data.append(data_list)
+                        success_count += 1
+                    else:
+                        print(f"Failed to process: {obj_path}")
+        else:
+            # Single-threaded processing for current batch
+            print("Using single-threaded processing")
+            
+            for args in current_batch_args:
+                obj_path, data_list = process_single_obj(args)
                 if data_list is not None:
-                    all_data_lists.append(data_list)
+                    current_batch_data.append(data_list)
                     success_count += 1
                 else:
                     print(f"Failed to process: {obj_path}")
-    else:
-        # Single-threaded processing
-        print("Using single-threaded processing")
         
-        for args in args_list:
-            obj_path, data_list = process_single_obj(args)
-            if data_list is not None:
-                all_data_lists.append(data_list)
-                success_count += 1
-            else:
-                print(f"Failed to process: {obj_path}")
+        # Save current batch data
+        if current_batch_data:
+            pth_output_path = Path(output_dir) / f"voxel_data_batch_{batch_count}.pth"
+            data_out = {
+                'voxel_size': voxel_size,
+                'bbox_min': BBOX_MIN,
+                'bbox_max': BBOX_MAX,
+                'volume_dims': volume_dims,
+                'data_lists': current_batch_data,
+                'batch_info': {
+                    'batch_number': batch_count,
+                    'files_in_batch': len(current_batch_data),
+                    'file_range': f"{batch_start+1}-{batch_end}"
+                }
+            }
+            torch.save(data_out, str(pth_output_path))
+            print(f"Saved batch {batch_count} with {len(current_batch_data)} data lists to: {pth_output_path}")
         
-    # Save all data lists to a single pth file
-    if all_data_lists:
-        pth_output_path = Path(output_dir) / "all_voxel_data.pth"
-        data_out = {
-            'voxel_size': voxel_size,
-            'bbox_min': BBOX_MIN,
-            'bbox_max': BBOX_MAX,
-            'volume_dims': volume_dims,
-            'data_lists': all_data_lists
-        }
-        torch.save(data_out, str(pth_output_path))
-        print(f"\nSaved {len(all_data_lists)} data lists to: {pth_output_path}")
+        batch_count += 1
     
-    print(f"Processing complete!")
-    print(f"Successfully processed {success_count}/{len(obj_files)} files")
+    print(f"\nProcessing complete!")
+    print(f"Successfully processed {success_count}/{len(obj_files)} files in {batch_count} batches")
 
 if __name__ == "__main__":
     main()

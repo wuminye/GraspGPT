@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import numpy as np
 import random
+import glob
+import os
 try:
     from .token_manager import get_token_manager
     from .parser_and_serializer import Serializer, Seq, SB, CB
@@ -41,7 +43,7 @@ class VoxelDataset(Dataset):
         Initialize the VoxelDataset
         
         Args:
-            data_path (str): Path to the all_voxel_data.pth file
+            data_path (str): Path to directory containing .pth files or single .pth file
             tokenizer_fn (Callable, optional): Function to convert voxel data to token sequences
                                              If None, will create real grammar-based tokenizer
             max_sequence_length (int): Maximum sequence length for padding/truncation
@@ -50,39 +52,13 @@ class VoxelDataset(Dataset):
         self.data_path = Path(data_path)
         self.max_sequence_length = max_sequence_length
         
-        # Load the data
-        try:
-            if weights_only:
-                raw_data = torch.load(self.data_path, weights_only=True)
-            else:
-                raw_data = torch.load(self.data_path, weights_only=False)
-        except Exception as e:
-            if not weights_only:
-                raise e
-            print(f"Warning: weights_only=True failed, trying weights_only=False: {e}")
-            raw_data = torch.load(self.data_path, weights_only=False)
-        
-        # Extract data and metadata from new pth format
-        if isinstance(raw_data, dict):
-            # New format with metadata
-            self.voxel_size = raw_data.get('voxel_size')
-            self.bbox_min = raw_data.get('bbox_min')
-            self.bbox_max = raw_data.get('bbox_max')
-            self.volume_dims = raw_data.get('volume_dims')
-            self.data = raw_data.get('data_lists', [])
-            
-            print(f"Loaded {len(self.data)} samples from {self.data_path}")
-            print(f"Volume dimensions: {self.volume_dims}")
-            print(f"Voxel size: {self.voxel_size}")
+        # Check if data_path is a directory or a single file
+        if self.data_path.is_dir():
+            # Load all .pth files from directory
+            self.data, self.voxel_size, self.bbox_min, self.bbox_max, self.volume_dims = self._load_from_directory(weights_only)
         else:
-            # Legacy format - just the data lists
-            self.data = raw_data
-            self.volume_dims = [128, 128, 128]  # Default dimensions
-            self.voxel_size = None
-            self.bbox_min = None
-            self.bbox_max = None
-            print(f"Loaded {len(self.data)} samples from {self.data_path} (legacy format)")
-            print(f"Using default volume dimensions: {self.volume_dims}")
+            # Load single file (backward compatibility)
+            self.data, self.voxel_size, self.bbox_min, self.bbox_max, self.volume_dims = self._load_single_file(self.data_path, weights_only)
 
 
         #Set up token manager and mapping
@@ -274,6 +250,183 @@ class VoxelDataset(Dataset):
         }
         
         return info
+    
+    def _load_single_file(self, file_path: Path, weights_only: bool) -> Tuple[List, any, any, any, List]:
+        """
+        Load data from a single .pth file
+        
+        Returns:
+            Tuple of (data_lists, voxel_size, bbox_min, bbox_max, volume_dims)
+        """
+        try:
+            if weights_only:
+                raw_data = torch.load(file_path, weights_only=True)
+            else:
+                raw_data = torch.load(file_path, weights_only=False)
+        except Exception as e:
+            if not weights_only:
+                raise e
+            print(f"Warning: weights_only=True failed, trying weights_only=False: {e}")
+            raw_data = torch.load(file_path, weights_only=False)
+        
+        # Extract data and metadata from pth format
+        if isinstance(raw_data, dict):
+            # New format with metadata
+            voxel_size = raw_data.get('voxel_size')
+            bbox_min = raw_data.get('bbox_min')
+            bbox_max = raw_data.get('bbox_max')
+            volume_dims = raw_data.get('volume_dims')
+            data_lists = raw_data.get('data_lists', [])
+            
+            print(f"Loaded {len(data_lists)} samples from {file_path}")
+            print(f"Volume dimensions: {volume_dims}")
+            print(f"Voxel size: {voxel_size}")
+        else:
+            # Legacy format - just the data lists
+            data_lists = raw_data
+            volume_dims = [128, 128, 128]  # Default dimensions
+            voxel_size = None
+            bbox_min = None
+            bbox_max = None
+            print(f"Loaded {len(data_lists)} samples from {file_path} (legacy format)")
+            print(f"Using default volume dimensions: {volume_dims}")
+        
+        return data_lists, voxel_size, bbox_min, bbox_max, volume_dims
+    
+    def _load_from_directory(self, weights_only: bool) -> Tuple[List, any, any, any, List]:
+        """
+        Load and concatenate data from all .pth files in directory
+        
+        Returns:
+            Tuple of (concatenated_data_lists, voxel_size, bbox_min, bbox_max, volume_dims)
+        """
+        # Find all .pth files in the directory
+        pth_files = list(self.data_path.glob('*.pth'))
+        if not pth_files:
+            raise ValueError(f"No .pth files found in directory {self.data_path}")
+        
+        print(f"Found {len(pth_files)} .pth files in {self.data_path}")
+        
+        all_data_lists = []
+        metadata_list = []
+        
+        for file_path in sorted(pth_files):  # Sort for consistent ordering
+            print(f"Loading {file_path.name}...")
+            data_lists, voxel_size, bbox_min, bbox_max, volume_dims = self._load_single_file(file_path, weights_only)
+            
+            # Store metadata for validation
+            metadata = {
+                'file': file_path.name,
+                'voxel_size': voxel_size,
+                'bbox_min': bbox_min,
+                'bbox_max': bbox_max,
+                'volume_dims': volume_dims
+            }
+            metadata_list.append(metadata)
+            
+            # Add data to combined list
+            all_data_lists.extend(data_lists)
+        
+        # Validate metadata consistency
+        self._validate_metadata_consistency(metadata_list)
+        
+        # Use metadata from first file (they should all be the same after validation)
+        first_metadata = metadata_list[0]
+        final_voxel_size = first_metadata['voxel_size']
+        final_bbox_min = first_metadata['bbox_min']
+        final_bbox_max = first_metadata['bbox_max']
+        final_volume_dims = first_metadata['volume_dims']
+        
+        print(f"Successfully loaded and concatenated {len(all_data_lists)} total samples from {len(pth_files)} files")
+        print(f"Final volume dimensions: {final_volume_dims}")
+        print(f"Final voxel size: {final_voxel_size}")
+        
+        return all_data_lists, final_voxel_size, final_bbox_min, final_bbox_max, final_volume_dims
+    
+    def _validate_metadata_consistency(self, metadata_list: List[dict]):
+        """
+        Validate that all files have consistent metadata
+        
+        Args:
+            metadata_list: List of metadata dictionaries from all loaded files
+        
+        Raises:
+            ValueError: If metadata is inconsistent across files
+        """
+        if len(metadata_list) < 2:
+            return  # No validation needed for single file
+        
+        reference_metadata = metadata_list[0]
+        
+        for i, metadata in enumerate(metadata_list[1:], 1):
+            # Check volume_dims (handle numpy arrays)
+            ref_dims = reference_metadata['volume_dims']
+            cur_dims = metadata['volume_dims']
+            
+            # Convert to lists for safe comparison
+            if hasattr(ref_dims, 'tolist'):
+                ref_dims = ref_dims.tolist()
+            if hasattr(cur_dims, 'tolist'):
+                cur_dims = cur_dims.tolist()
+            
+            if ref_dims != cur_dims:
+                raise ValueError(
+                    f"Volume dimensions mismatch: {reference_metadata['file']} has "
+                    f"{ref_dims} but {metadata['file']} has {cur_dims}"
+                )
+            
+            # Check voxel_size (handle arrays and None values)
+            ref_voxel = reference_metadata['voxel_size']
+            cur_voxel = metadata['voxel_size']
+            
+            # Convert to comparable format
+            if hasattr(ref_voxel, 'tolist'):
+                ref_voxel = ref_voxel.tolist()
+            if hasattr(cur_voxel, 'tolist'):
+                cur_voxel = cur_voxel.tolist()
+            
+            if ref_voxel != cur_voxel:
+                if ref_voxel is not None and cur_voxel is not None:
+                    raise ValueError(
+                        f"Voxel size mismatch: {reference_metadata['file']} has "
+                        f"{ref_voxel} but {metadata['file']} has {cur_voxel}"
+                    )
+            
+            # Check bbox_min (handle arrays and None values)
+            ref_min = reference_metadata['bbox_min']
+            cur_min = metadata['bbox_min']
+            
+            # Convert to comparable format
+            if hasattr(ref_min, 'tolist'):
+                ref_min = ref_min.tolist()
+            if hasattr(cur_min, 'tolist'):
+                cur_min = cur_min.tolist()
+                
+            if ref_min != cur_min:
+                if ref_min is not None and cur_min is not None:
+                    raise ValueError(
+                        f"bbox_min mismatch: {reference_metadata['file']} has "
+                        f"{ref_min} but {metadata['file']} has {cur_min}"
+                    )
+            
+            # Check bbox_max (handle arrays and None values)
+            ref_max = reference_metadata['bbox_max']
+            cur_max = metadata['bbox_max']
+            
+            # Convert to comparable format
+            if hasattr(ref_max, 'tolist'):
+                ref_max = ref_max.tolist()
+            if hasattr(cur_max, 'tolist'):
+                cur_max = cur_max.tolist()
+                
+            if ref_max != cur_max:
+                if ref_max is not None and cur_max is not None:
+                    raise ValueError(
+                        f"bbox_max mismatch: {reference_metadata['file']} has "
+                        f"{ref_max} but {metadata['file']} has {cur_max}"
+                    )
+        
+        print(f"Metadata validation passed: all {len(metadata_list)} files have consistent metadata")
 
 
 

@@ -13,7 +13,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from transformers import AutoModelForCausalLM, AutoConfig
+from transformers import AutoModelForCausalLM, AutoConfig, Qwen2ForCausalLM, Qwen2Config
 
 from .utils import CfgNode as CN
 
@@ -506,10 +506,25 @@ class graspGPT(nn.Module):
         use_rope = getattr(config, 'use_rope', True)
         
         if use_rope:
-            # Use our custom RoPE implementation
-            print("Using RoPE position encoding")
-            self.model = RoPEGPT(config)
-            self.num_heads = 1  # RoPE version only supports single head for now
+            # Use Qwen2 from transformers library
+            print("Using Qwen2 model with RoPE position encoding")
+            # Create Qwen2 config with proper head configuration
+            qwen_config = Qwen2Config(
+                vocab_size=config.vocab_size[0] if isinstance(config.vocab_size, list) else config.vocab_size,
+                hidden_size=config.n_embd,
+                intermediate_size=4 * config.n_embd,
+                num_hidden_layers=config.n_layer,
+                num_attention_heads=config.n_head,
+                num_key_value_heads=config.n_head,  # Set key-value heads equal to attention heads
+                max_position_embeddings=config.block_size,
+                rms_norm_eps=1e-6,
+                tie_word_embeddings=True,
+                attention_dropout=config.attn_pdrop,
+                # RoPE specific settings
+                rope_theta=getattr(config, 'rope_base', 10000.0),
+            )
+            self.model = Qwen2ForCausalLM(qwen_config)
+            self.num_heads = 1
         else:
             # Use traditional transformers implementation
             print("Using traditional absolute position encoding")
@@ -631,11 +646,23 @@ class graspGPT(nn.Module):
             input_ids = idx[..., 0].long()  # Use first feature as main input
             
             
-            # Forward through RoPE model
-            logits, loss = self.model(input_ids, targets=targets[..., 0].long() if targets is not None else None, attention_mask=attention_mask)
+
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True
+            )
+            logits = outputs.logits
+            loss = None
             
             # Create list of logits for multi-head output
             logits_heads = [logits]
+
+            loss = None
+            if targets is not None:
+                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), 
+                                     targets[..., 0].long().reshape(-1), 
+                                     ignore_index=-1)
             
             return logits_heads, loss
         else:

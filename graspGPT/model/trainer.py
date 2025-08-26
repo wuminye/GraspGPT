@@ -56,9 +56,11 @@ def pad_collate(batch):
 
     x_batch = chunks[:, :-1, ...]  # Input tokens
     y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
-    att_batch = (x_batch!=-1)
+    #att_batch = (x_batch!=-1)
+    att_batch = None
 
     x_batch[x_batch<0]=0
+
 
     return x_batch, y_batch, att_batch
 
@@ -174,21 +176,12 @@ class Trainer:
                 batch = next(data_iter)
             batch = [t.cuda(non_blocking=True) if t is not None and torch.is_tensor(t) else t for t in batch]
             x, y, att = batch  
-            if self.use_amp:
-                with autocast('cuda'):
-                    logits, self.loss = model(x, targets=y, attention_mask=att)
-                model.zero_grad(set_to_none=True)
-                self.scaler.scale(self.loss).backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                att = None
-                logits, self.loss = model(x, targets=y, attention_mask=att)
-                model.zero_grad(set_to_none=True)
-                self.loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
-                self.optimizer.step()
+
+            logits, self.loss = model(x, targets=y, attention_mask=att)
+            model.zero_grad(set_to_none=True)
+            self.loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
+            self.optimizer.step()
             
             # Update learning rate with warmup and scheduler
             self._update_lr_with_warmup()
