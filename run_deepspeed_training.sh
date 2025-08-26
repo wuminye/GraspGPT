@@ -11,10 +11,8 @@ NUM_GPUS=${1:-2}
 # Shift to get additional arguments
 shift 2>/dev/null || true
 
-# Activate conda environment
-echo "Activating conda environment: grasp"
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate grasp
+
+
 
 # Set CUDA visible devices if needed
 export CUDA_VISIBLE_DEVICES=0,1,2,3
