@@ -179,9 +179,20 @@ class RoPEAttention(nn.Module):
             # Convert attention_mask from [B, T] to [B, 1, T, T] for scaled_dot_product_attention
             attn_mask_4d = None
             if attention_mask is not None:
-                # attention_mask is [B, T], convert to [B, 1, T, T]
-                attn_mask_4d = attention_mask.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, T]
-                attn_mask_4d = attn_mask_4d.expand(-1, -1, T, -1)  # [B, 1, T, T]
+                # Handle different input dimensions of attention_mask
+                if attention_mask.dim() == 2:  # [B, T]
+                    attn_mask_4d = attention_mask.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, T]
+                    attn_mask_4d = attn_mask_4d.expand(-1, -1, T, -1)  # [B, 1, T, T]
+                elif attention_mask.dim() == 4:  # Already [B, 1, T, T] or similar
+                    attn_mask_4d = attention_mask
+                else:
+                    # Squeeze extra dimensions and reshape to [B, T] then convert to 4D
+                    attn_mask_4d = attention_mask.squeeze()
+                    if attn_mask_4d.dim() == 2:  # Now [B, T]
+                        attn_mask_4d = attn_mask_4d.unsqueeze(1).unsqueeze(1)  # [B, 1, 1, T]
+                        attn_mask_4d = attn_mask_4d.expand(-1, -1, T, -1)  # [B, 1, T, T]
+                    else:
+                        raise ValueError(f"Unsupported attention_mask dimensions: {attention_mask.shape}")
                 # Convert boolean mask to float mask for attention
                 attn_mask_4d = attn_mask_4d.float().masked_fill(~attn_mask_4d.bool(), float('-inf'))
             
@@ -486,7 +497,7 @@ class graspGPT(nn.Module):
                 # (there are a number more...)
                 # I made these tiny models up
                 'gpt-my_mini':     dict(n_layer=6, n_head=8, n_embd=512),
-                'gpt-mini':     dict(n_layer=6, n_head=6, n_embd=192),
+                'gpt-mini':     dict(n_layer=6, n_head=8, n_embd=256),
                 'gpt-micro':    dict(n_layer=4, n_head=4, n_embd=128),
                 'gpt-nano':     dict(n_layer=3, n_head=3, n_embd=48),
             }[config.model_type])

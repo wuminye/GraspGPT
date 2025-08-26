@@ -18,46 +18,47 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ExponentialLR
 
 def pad_collate(batch):
     """
-    Pads the batch of (x, y, attention_mask) tuples to the same temporal length.
-    Handles variable sequence lengths by padding to the maximum length in the batch.
+    Splits tokens by max_sequence_length into chunks and pads the last chunk if needed.
     
     Args:
-        batch: List of tuples (input_tokens, target_tokens, attention_mask)
-            - input_tokens: tensor of shape [seq_len, num_features] 
-            - target_tokens: tensor of shape [seq_len, num_features]
-            - attention_mask: tensor of shape [seq_len]
+        batch: List of tuples (tokens, max_sequence_length)
+            - tokens: tensor of shape [seq_len, ...]
+            - max_sequence_length: int, maximum sequence length for chunking
     
     Returns:
-        x_batch: (batch_size, max_seq_len, num_features) - padded input tokens
-        y_batch: (batch_size, max_seq_len, num_features) - padded target tokens  
-        att_batch: (batch_size, max_seq_len) - padded attention masks
+        List of tensors, where each tensor has shape [max_sequence_length, ...] except
+        possibly the last one which is padded with -1 if it's shorter than max_sequence_length
     """
-    xs, ys, atts = zip(*batch)
+    tokens, max_sequence_length = zip(*batch)
+    max_sequence_length = max_sequence_length[0]
     
-    # Find maximum sequence length in the batch
-    max_length = max(x.shape[0] for x in xs)
-    batch_size = len(xs)
+    # Concatenate all tokens along the first dimension
+    tokens = torch.cat(tokens, dim=0)
     
-    # Get number of features from first sample
-    num_features = xs[0].shape[1] if xs[0].dim() > 1 else 1
+    # Split tokens into chunks of max_sequence_length
+    seq_len = tokens.shape[0]
+    chunks = []
     
-    # Initialize padded tensors
-    x_batch = torch.zeros(batch_size, max_length, num_features, dtype=xs[0].dtype)
-    y_batch = torch.zeros(batch_size, max_length, num_features, dtype=ys[0].dtype)
-    att_batch = torch.zeros(batch_size, max_length, dtype=atts[0].dtype)
-    
-    # Fill in the actual data
-    for i, (x, y, att) in enumerate(zip(xs, ys, atts)):
-        seq_len = x.shape[0]
-        if x.dim() == 1:
-            # Handle 1D case by adding feature dimension
-            x = x.unsqueeze(-1)
-            y = y.unsqueeze(-1)
+    for i in range(0, seq_len, max_sequence_length):
+        chunk = tokens[i:i + max_sequence_length]
         
-        x_batch[i, :seq_len] = x
-        y_batch[i, :seq_len] = y  
-        y_batch[i, seq_len:] = -1
-        att_batch[i, :seq_len] = att
+        # If this is the last chunk and it's shorter than max_sequence_length, pad it
+        if chunk.shape[0] < max_sequence_length:
+            pad_size = max_sequence_length - chunk.shape[0]
+            # Create padding tensor with -1 values, matching the shape of chunk except first dimension
+            pad_shape = [pad_size] + list(chunk.shape[1:])
+            padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
+            chunk = torch.cat([chunk, padding], dim=0)
+        
+        chunks.append(chunk)
+
+    chunks = torch.stack(chunks, dim=0)  # Shape: [num_chunks, max_sequence_length, ...]
+
+    x_batch = chunks[:, :-1, ...]  # Input tokens
+    y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
+    att_batch = (x_batch!=-1)
+
+    x_batch[x_batch<0]=0
 
     return x_batch, y_batch, att_batch
 
@@ -182,6 +183,7 @@ class Trainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
+                att = None
                 logits, self.loss = model(x, targets=y, attention_mask=att)
                 model.zero_grad(set_to_none=True)
                 self.loss.backward()

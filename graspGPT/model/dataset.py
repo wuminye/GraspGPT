@@ -239,21 +239,10 @@ class VoxelDataset(Dataset):
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
         
-        # Create input and target sequences (shift by 1 for language modeling)
-        if seq_len > 1:
-            input_tokens = tokens[:-1]  # All tokens except last
-            target_tokens = tokens[1:]  # All tokens except first
-            actual_seq_len = seq_len - 1
-        else:
-            # Handle single token case
-            input_tokens = tokens
-            target_tokens = tokens
-            actual_seq_len = seq_len
         
-        # Create attention mask (1 for valid tokens, 0 for padding)
-        attention_mask = torch.ones(actual_seq_len, dtype=torch.bool)
         
-        return input_tokens, target_tokens, attention_mask
+        
+        return tokens, self.max_sequence_length
     
     def get_vocab_size(self) -> int:
         """
