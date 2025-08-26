@@ -486,7 +486,7 @@ class graspGPT(nn.Module):
                 # (there are a number more...)
                 # I made these tiny models up
                 'gpt-my_mini':     dict(n_layer=6, n_head=8, n_embd=512),
-                'gpt-mini':     dict(n_layer=7, n_head=8, n_embd=64),
+                'gpt-mini':     dict(n_layer=7, n_head=8, n_embd=128),
                 'gpt-micro':    dict(n_layer=4, n_head=4, n_embd=128),
                 'gpt-nano':     dict(n_layer=3, n_head=3, n_embd=48),
             }[config.model_type])
