@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import numpy as np
+import random
 try:
     from .token_manager import get_token_manager
     from .parser_and_serializer import Serializer, Seq, SB, CB
@@ -135,6 +136,9 @@ class VoxelDataset(Dataset):
             """
             # Step 1: Collect all SBs from the sample
             sbs = []
+            
+            # Randomly shuffle the voxel_data order
+            random.shuffle(voxel_data)
             
             for color, coordinates in voxel_data:
                 # Map color to shape tag - use object tags based on color value
