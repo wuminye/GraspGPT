@@ -62,7 +62,7 @@ def get_default_config():
     # Training configuration  
     C.trainer = Trainer.get_default_config()
     C.trainer.learning_rate = 3e-4
-    C.trainer.batch_size = 9
+    C.trainer.batch_size = 20
     C.trainer.max_iters = 100000
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
