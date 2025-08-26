@@ -26,8 +26,8 @@ echo "Additional arguments: $@"
 # Run DeepSpeed training
 deepspeed --num_gpus=$NUM_GPUS train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
-    --batch_size 20 \
-    --micro_batch_size 5 \
+    --batch_size 30 \
+    --micro_batch_size 9 \
     --learning_rate 3e-4 \
     --max_iters 200000 \
     --wandb_project "graspgpt-deepspeed" \
