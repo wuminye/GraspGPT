@@ -46,10 +46,28 @@ def collect_sb_coords(ast_node: Union[SB, UNSEG, INPAINT, AMODAL], coords_with_c
             collect_sb_coords(sb, coords_with_colors)
 
 
+def count_sb_nodes(ast_node: Union[SB, UNSEG, INPAINT, AMODAL]) -> int:
+    """递归计算AST中SB节点的总数"""
+    if isinstance(ast_node, SB):
+        return 1
+    elif isinstance(ast_node, UNSEG):
+        return sum(count_sb_nodes(sb) for sb in ast_node.sbs)
+    elif isinstance(ast_node, INPAINT):
+        return 1 if ast_node.sb is not None else 0
+    elif isinstance(ast_node, AMODAL):
+        return (sum(count_sb_nodes(sb) for sb in ast_node.fragment_sbs) +
+                sum(count_sb_nodes(sb) for sb in ast_node.amodal_sbs))
+    return 0
+
+
 def save_voxels(sequence: list, file_path: str):
     """将sequence解析成AST，提取所有SB的坐标，保存为带颜色的点云OBJ文件"""
     parser = Parser(sequence)
     ast = parser.parse()
+    
+    # 计算SB总数
+    total_sbs = sum(count_sb_nodes(item) for item in ast.items)
+    print(f"Total SBs: {total_sbs}")
     
     coords_with_colors = []
     for item in ast.items:
@@ -57,6 +75,7 @@ def save_voxels(sequence: list, file_path: str):
     
     with open(file_path, 'w') as f:
         f.write("# Voxel point cloud generated from AST\n")
+        f.write(f"# Total SBs: {total_sbs}\n")
         f.write(f"# Total points: {len(coords_with_colors)}\n\n")
         
         for x, y, z, r, g, b in coords_with_colors:
