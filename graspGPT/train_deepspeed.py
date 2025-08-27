@@ -167,25 +167,16 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
     # Ensure output directory exists on all ranks
     os.makedirs(output_dir, exist_ok=True)
     
-    # Create specific checkpoint directories
-    checkpoint_dir = os.path.join(output_dir, f'iter_{iter_num}')
-    latest_dir = os.path.join(output_dir, 'latest')
+
     
+    # Wait for rank 0 to clean up
+    if dist.is_initialized():
+        dist.barrier()
+    
+    # Create checkpoint-specific directory  
+    checkpoint_dir = os.path.join(output_dir, f'iter_{iter_num}')
     if rank == 0:
-        # Create checkpoint directories safely
-        for dir_path in [checkpoint_dir, latest_dir]:
-            try:
-                if os.path.exists(dir_path):
-                    if not os.path.isdir(dir_path):
-                        # Remove file if it exists and is not a directory
-                        os.remove(dir_path)
-                        print(f"Removed existing file: {dir_path}")
-                    # If it's already a directory, that's fine
-                
-                os.makedirs(dir_path, exist_ok=True)
-            except OSError as e:
-                print(f"Warning: Could not create directory {dir_path}: {e}")
-                # Try to continue anyway
+        os.makedirs(checkpoint_dir, exist_ok=True)
         
         # Save additional training state
         training_state = {
@@ -207,21 +198,17 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
         
         training_state['config'] = config_dict
         
-        # Save training state for both checkpoints
-        for save_dir in [checkpoint_dir, latest_dir]:
-            training_state_path = os.path.join(save_dir, 'training_state.json')
-            with open(training_state_path, 'w') as f:
-                json.dump(training_state, f, indent=2)
+        # Save training state 
+        training_state_path = os.path.join(checkpoint_dir, 'training_state.json')
+        with open(training_state_path, 'w') as f:
+            json.dump(training_state, f, indent=2)
     
-    # Wait for rank 0 to create directories
+    # Wait for rank 0 to save training state
     if dist.is_initialized():
         dist.barrier()
     
-    # Save DeepSpeed checkpoint
+    # Save DeepSpeed checkpoint (this will create the 'latest' file automatically)
     model_engine.save_checkpoint(output_dir, tag=f'iter_{iter_num}')
-    
-    # Also save as latest checkpoint
-    model_engine.save_checkpoint(output_dir, tag='latest')
     
     return checkpoint_dir if rank == 0 else None
 
@@ -230,50 +217,61 @@ def load_checkpoint(model_engine, checkpoint_path, config):
     """Load model checkpoint using DeepSpeed"""
     rank = dist.get_rank() if dist.is_initialized() else 0
     
-    # Determine the actual checkpoint directory
-    if os.path.isdir(checkpoint_path):
-        # If it's a directory, use it directly
-        checkpoint_dir = checkpoint_path
-    else:
-        # If it's pointing to a specific checkpoint tag
-        parent_dir = os.path.dirname(checkpoint_path)
-        tag = os.path.basename(checkpoint_path)
-        checkpoint_dir = os.path.join(parent_dir, tag)
+    # Parse checkpoint path
+    parent_dir = os.path.dirname(checkpoint_path)
+    tag = os.path.basename(checkpoint_path)
     
-    # Load training state
-    training_state_path = os.path.join(checkpoint_dir, 'training_state.json')
-    if os.path.exists(training_state_path):
-        try:
-            with open(training_state_path, 'r') as f:
-                training_state = json.load(f)
-            iter_num = training_state.get('iter_num', 0)
-            loss = training_state.get('loss', float('inf'))
-        except (json.JSONDecodeError, FileNotFoundError) as e:
+    # Handle 'latest' checkpoint
+    if tag == 'latest':
+        # DeepSpeed creates a 'latest' file (not directory) pointing to the actual checkpoint
+        latest_file = os.path.join(parent_dir, 'latest')
+        if os.path.isfile(latest_file):
+            try:
+                with open(latest_file, 'r') as f:
+                    actual_tag = f.read().strip()
+                actual_checkpoint_dir = os.path.join(parent_dir, actual_tag)
+                if rank == 0:
+                    print(f"Latest checkpoint points to: {actual_tag}")
+            except Exception as e:
+                if rank == 0:
+                    print(f"Warning: Could not read latest file: {e}")
+                actual_checkpoint_dir = None
+        else:
             if rank == 0:
-                print(f"Warning: Could not load training state: {e}")
-            iter_num = 0
-            loss = float('inf')
+                print("Warning: 'latest' file not found")
+            actual_checkpoint_dir = None
+    else:
+        # Specific checkpoint (like iter_1000)
+        actual_checkpoint_dir = os.path.join(parent_dir, tag)
+    
+    # Load training state from the actual checkpoint directory
+    iter_num = 0
+    loss = float('inf')
+    
+    if actual_checkpoint_dir and os.path.exists(actual_checkpoint_dir):
+        training_state_path = os.path.join(actual_checkpoint_dir, 'training_state.json')
+        if os.path.exists(training_state_path):
+            try:
+                with open(training_state_path, 'r') as f:
+                    training_state = json.load(f)
+                iter_num = training_state.get('iter_num', 0)
+                loss = training_state.get('loss', float('inf'))
+            except (json.JSONDecodeError, FileNotFoundError) as e:
+                if rank == 0:
+                    print(f"Warning: Could not load training state: {e}")
+        else:
+            if rank == 0:
+                print(f"Warning: Training state not found at {training_state_path}")
     else:
         if rank == 0:
-            print(f"Warning: Training state file not found at {training_state_path}")
-        iter_num = 0
-        loss = float('inf')
+            print(f"Warning: Checkpoint directory not found: {actual_checkpoint_dir}")
     
-    # Load DeepSpeed checkpoint
+    # Load DeepSpeed checkpoint using parent directory and tag
     try:
-        if os.path.isdir(checkpoint_path):
-            # Load from directory - extract tag name
-            tag = os.path.basename(checkpoint_path)
-            parent_dir = os.path.dirname(checkpoint_path)
-            _, client_state = model_engine.load_checkpoint(parent_dir, tag=tag)
-        else:
-            # Load using the parent directory and extract tag
-            parent_dir = os.path.dirname(checkpoint_path)
-            tag = os.path.basename(checkpoint_path)
-            _, client_state = model_engine.load_checkpoint(parent_dir, tag=tag)
+        _, client_state = model_engine.load_checkpoint(parent_dir, tag=tag)
     except Exception as e:
         if rank == 0:
-            print(f"Error loading DeepSpeed checkpoint: {e}")
+            print(f"Error loading DeepSpeed checkpoint from {parent_dir} with tag {tag}: {e}")
         raise e
     
     if rank == 0:
