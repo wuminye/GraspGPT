@@ -208,7 +208,7 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
         dist.barrier()
     
     # Save DeepSpeed checkpoint (this will create the 'latest' file automatically)
-    model_engine.save_checkpoint(output_dir, tag=f'iter_{iter_num}')
+    model_engine.save_checkpoint(output_dir, tag=f'iter_{iter_num}', save_latest =False)
     
     return checkpoint_dir if rank == 0 else None
 
