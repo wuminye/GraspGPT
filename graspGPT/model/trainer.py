@@ -26,6 +26,7 @@ def pad_collate(batch):
     tokens, max_sequence_length = zip(*batch)
     max_length = max_sequence_length[0]
 
+    chunks = []
     for i in range(len(tokens)):
         chunk = tokens[i]
         
