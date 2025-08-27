@@ -36,7 +36,7 @@ def pad_collate(batch):
             pad_shape = [pad_size] + list(chunk.shape[1:])
             padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
             chunk = torch.cat([chunk, padding], dim=0)
-        else:
+        
 
         
         chunks.append(chunk)
