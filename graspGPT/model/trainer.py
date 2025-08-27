@@ -30,8 +30,8 @@ def pad_collate(batch):
         chunk = tokens[i]
         
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
-        if chunk.shape[0] < max_sequence_length:
-            pad_size = max_sequence_length - chunk.shape[0]
+        if chunk.shape[0] < max_length:
+            pad_size = max_length - chunk.shape[0]
             # Create padding tensor with -1 values, matching the shape of chunk except first dimension
             pad_shape = [pad_size] + list(chunk.shape[1:])
             padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
