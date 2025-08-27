@@ -753,15 +753,30 @@ class graspGPT(nn.Module):
             # RoPE version
             input_ids = idx[..., 0].long() if idx.dim() > 2 else idx.long()
             
-            # Use our custom RoPE generate method
-            generated_ids = self.model.generate(
-                input_ids, 
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=do_sample,
-                top_k=top_k,
-                end_token=end_token
+            # Prepare generation config for transformers
+            generation_config = {
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "return_dict_in_generate": True,
+                "output_scores": True,
+                "use_cache": True
+            }
+            
+            # Add optional parameters only if they're not None
+            if top_k is not None:
+                generation_config["top_k"] = top_k
+            if end_token is not None:
+                generation_config["eos_token_id"] = end_token
+                generation_config["pad_token_id"] = 0
+            
+            # Use transformers generate method
+            generated = self.model.generate(
+                input_ids=input_ids,
+                **generation_config
             )
+            
+            generated_ids = generated.sequences
         else:
             # Original transformers version
             input_ids = idx[..., 0].long() if idx.dim() > 2 else idx.long()

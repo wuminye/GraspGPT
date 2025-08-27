@@ -114,7 +114,7 @@ class VoxelDataset(Dataset):
             sbs = []
             
             # Randomly shuffle the voxel_data order
-            random.shuffle(voxel_data)
+            #random.shuffle(voxel_data)
             
             for color, coordinates in voxel_data:
                 # Map color to shape tag - use object tags based on color value

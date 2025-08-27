@@ -15,8 +15,48 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ExponentialLR
 
 
 
-
 def pad_collate(batch):
+    """
+    Pads the batch of (x, y) pairs to the same temporal length.
+    Assumes x and y are (t x g) tensors.
+    Returns:
+        x: (b x t x g)
+        y: (b x t x g)
+    """
+    tokens, max_sequence_length = zip(*batch)
+    max_length = max_sequence_length[0]
+
+    for i in range(len(tokens)):
+        chunk = tokens[i]
+        
+        # If this is the last chunk and it's shorter than max_sequence_length, pad it
+        if chunk.shape[0] < max_sequence_length:
+            pad_size = max_sequence_length - chunk.shape[0]
+            # Create padding tensor with -1 values, matching the shape of chunk except first dimension
+            pad_shape = [pad_size] + list(chunk.shape[1:])
+            padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
+            chunk = torch.cat([chunk, padding], dim=0)
+        else:
+
+        
+        chunks.append(chunk)
+
+    chunks = torch.stack(chunks, dim=0)  # Shape: [num_chunks, max_sequence_length, ...]
+
+    x_batch = chunks[:, :-1, ...]  # Input tokens
+    y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
+    #att_batch = (x_batch!=-1)
+    att_batch = None
+
+    x_batch[x_batch<0]=0
+
+
+    return x_batch, y_batch, att_batch
+
+
+
+
+def pad_collate_packed(batch):
     """
     Splits tokens by max_sequence_length into chunks and pads the last chunk if needed.
     

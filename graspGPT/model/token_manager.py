@@ -362,3 +362,11 @@ def generate_mapping(img_h: int, img_w: int) -> Dict:
         Dict: token到ID的映射表
     """
     return get_token_manager().generate_mapping(img_h, img_w) 
+
+
+def encode_sequence(sequence: list, mapping: dict) -> list:
+    return [mapping[elem] for elem in sequence]
+
+def decode_sequence(encoded: list, mapping: dict) -> list:
+    inv_map = {v: k for k, v in mapping.items()}
+    return [inv_map[i] for i in encoded]
