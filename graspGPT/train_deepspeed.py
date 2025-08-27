@@ -63,7 +63,7 @@ def get_default_config():
     
     # Training configuration  
     C.trainer = CN()
-    C.trainer.learning_rate = 3e-4
+    C.trainer.learning_rate = 2e-4
     C.trainer.batch_size = 10  # Global batch size across all GPUs
     C.trainer.micro_batch_size = 2  # Per-GPU micro batch size
     C.trainer.max_iters = 200000
@@ -86,7 +86,7 @@ def get_default_config():
     # System configuration
     C.system = CN()
     C.system.output_dir = "../output/checkpoints"
-    C.system.save_every = 10000  # Save checkpoint every N iterations
+    C.system.save_every = 2000  # Save checkpoint every N iterations
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
     
@@ -164,9 +164,16 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
     """Save model checkpoint using DeepSpeed"""
     rank = dist.get_rank() if dist.is_initialized() else 0
     
+    # Ensure output directory exists on all ranks
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Create specific checkpoint directories
+    checkpoint_dir = os.path.join(output_dir, f'iter_{iter_num}')
+    latest_dir = os.path.join(output_dir, 'latest')
+    
     if rank == 0:
-        checkpoint_dir = os.path.join(output_dir, f'checkpoint_iter_{iter_num}')
         os.makedirs(checkpoint_dir, exist_ok=True)
+        os.makedirs(latest_dir, exist_ok=True)
         
         # Save additional training state
         training_state = {
@@ -175,12 +182,28 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
             'loss': loss
         }
         
-        training_state_path = os.path.join(checkpoint_dir, 'training_state.json')
-        with open(training_state_path, 'w') as f:
-            # Convert config to dict for JSON serialization
-            config_dict = config.to_dict() if hasattr(config, 'to_dict') else dict(config)
-            training_state['config'] = config_dict
-            json.dump(training_state, f, indent=2)
+        # Convert config to dict for JSON serialization
+        config_dict = {}
+        for key, value in config.items() if hasattr(config, 'items') else vars(config).items():
+            try:
+                # Try to serialize the value
+                json.dumps(value)
+                config_dict[key] = value
+            except (TypeError, ValueError):
+                # Skip non-serializable values
+                config_dict[key] = str(value)
+        
+        training_state['config'] = config_dict
+        
+        # Save training state for both checkpoints
+        for save_dir in [checkpoint_dir, latest_dir]:
+            training_state_path = os.path.join(save_dir, 'training_state.json')
+            with open(training_state_path, 'w') as f:
+                json.dump(training_state, f, indent=2)
+    
+    # Wait for rank 0 to create directories
+    if dist.is_initialized():
+        dist.barrier()
     
     # Save DeepSpeed checkpoint
     model_engine.save_checkpoint(output_dir, tag=f'iter_{iter_num}')
@@ -191,26 +214,58 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
     return checkpoint_dir if rank == 0 else None
 
 
-def load_checkpoint(model_engine, checkpoint_dir, config):
+def load_checkpoint(model_engine, checkpoint_path, config):
     """Load model checkpoint using DeepSpeed"""
     rank = dist.get_rank() if dist.is_initialized() else 0
+    
+    # Determine the actual checkpoint directory
+    if os.path.isdir(checkpoint_path):
+        # If it's a directory, use it directly
+        checkpoint_dir = checkpoint_path
+    else:
+        # If it's pointing to a specific checkpoint tag
+        parent_dir = os.path.dirname(checkpoint_path)
+        tag = os.path.basename(checkpoint_path)
+        checkpoint_dir = os.path.join(parent_dir, tag)
     
     # Load training state
     training_state_path = os.path.join(checkpoint_dir, 'training_state.json')
     if os.path.exists(training_state_path):
-        with open(training_state_path, 'r') as f:
-            training_state = json.load(f)
-        iter_num = training_state.get('iter_num', 0)
-        loss = training_state.get('loss', float('inf'))
+        try:
+            with open(training_state_path, 'r') as f:
+                training_state = json.load(f)
+            iter_num = training_state.get('iter_num', 0)
+            loss = training_state.get('loss', float('inf'))
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if rank == 0:
+                print(f"Warning: Could not load training state: {e}")
+            iter_num = 0
+            loss = float('inf')
     else:
+        if rank == 0:
+            print(f"Warning: Training state file not found at {training_state_path}")
         iter_num = 0
         loss = float('inf')
     
     # Load DeepSpeed checkpoint
-    _, client_state = model_engine.load_checkpoint(checkpoint_dir)
+    try:
+        if os.path.isdir(checkpoint_path):
+            # Load from directory - extract tag name
+            tag = os.path.basename(checkpoint_path)
+            parent_dir = os.path.dirname(checkpoint_path)
+            _, client_state = model_engine.load_checkpoint(parent_dir, tag=tag)
+        else:
+            # Load using the parent directory and extract tag
+            parent_dir = os.path.dirname(checkpoint_path)
+            tag = os.path.basename(checkpoint_path)
+            _, client_state = model_engine.load_checkpoint(parent_dir, tag=tag)
+    except Exception as e:
+        if rank == 0:
+            print(f"Error loading DeepSpeed checkpoint: {e}")
+        raise e
     
     if rank == 0:
-        print(f"Loaded checkpoint from {checkpoint_dir}, iteration {iter_num}, loss {loss}")
+        print(f"Loaded checkpoint from {checkpoint_path}, iteration {iter_num}, loss {loss}")
     
     return iter_num, loss
 
@@ -458,8 +513,15 @@ def main():
         if args.resume:
             if rank == 0:
                 print(f"Resuming training from {args.resume}")
-            start_iter, loss = load_checkpoint(model_engine, args.resume, config)
-            log_message(f"Resumed training from iteration {start_iter}, loss: {loss:.4f}", log_file)
+            try:
+                start_iter, loss = load_checkpoint(model_engine, args.resume, config)
+                log_message(f"Resumed training from iteration {start_iter}, loss: {loss:.4f}", log_file)
+            except Exception as e:
+                error_msg = f"Failed to resume from checkpoint {args.resume}: {e}"
+                if rank == 0:
+                    print(error_msg)
+                log_message(error_msg, log_file)
+                raise e
         
         # Start training
         log_message("Starting training loop", log_file)

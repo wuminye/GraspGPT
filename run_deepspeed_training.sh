@@ -29,7 +29,7 @@ deepspeed --num_gpus=$NUM_GPUS train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
     --batch_size 32 \
     --micro_batch_size 8 \
-    --learning_rate 3e-4 \
+    --learning_rate 2e-4 \
     --max_iters 200000 \
     --wandb_project "graspgpt-deepspeed" \
     "$@"
