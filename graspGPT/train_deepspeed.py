@@ -64,8 +64,8 @@ def get_default_config():
     # Training configuration  
     C.trainer = CN()
     C.trainer.learning_rate = 2e-4
-    C.trainer.batch_size = 10  # Global batch size across all GPUs
-    C.trainer.micro_batch_size = 2  # Per-GPU micro batch size
+    C.trainer.batch_size = 24  # Global batch size across all GPUs
+    C.trainer.micro_batch_size = 6  # Per-GPU micro batch size
     C.trainer.max_iters = 200000
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
@@ -79,7 +79,7 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/pointclouds/"
-    C.dataset.max_sequence_length = 2896
+    C.dataset.max_sequence_length = 2596
     C.dataset.num_workers = 4
     C.dataset.weights_only = False
     

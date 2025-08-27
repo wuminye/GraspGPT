@@ -6,3 +6,4 @@
 /graspGPT/model/__pycache__
 /graspGPT/wandb
 /wandb
+*.obj
