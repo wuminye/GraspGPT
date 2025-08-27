@@ -172,8 +172,20 @@ def save_checkpoint(model_engine, config, iter_num, loss, output_dir):
     latest_dir = os.path.join(output_dir, 'latest')
     
     if rank == 0:
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        os.makedirs(latest_dir, exist_ok=True)
+        # Create checkpoint directories safely
+        for dir_path in [checkpoint_dir, latest_dir]:
+            try:
+                if os.path.exists(dir_path):
+                    if not os.path.isdir(dir_path):
+                        # Remove file if it exists and is not a directory
+                        os.remove(dir_path)
+                        print(f"Removed existing file: {dir_path}")
+                    # If it's already a directory, that's fine
+                
+                os.makedirs(dir_path, exist_ok=True)
+            except OSError as e:
+                print(f"Warning: Could not create directory {dir_path}: {e}")
+                # Try to continue anyway
         
         # Save additional training state
         training_state = {
