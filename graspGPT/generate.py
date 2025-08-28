@@ -305,7 +305,7 @@ def main():
                        help='Path to file containing prompt token IDs (one per line or comma-separated)')
     parser.add_argument('--max_new_tokens', type=int, default=50,
                        help='Maximum number of new tokens to generate')
-    parser.add_argument('--temperature', type=float, default=1.0,
+    parser.add_argument('--temperature', type=float, default=0.3,
                        help='Sampling temperature (1.0 = no change, >1.0 = more random, <1.0 = more deterministic)')
     parser.add_argument('--do_sample', action='store_true',
                        help='Use sampling instead of greedy decoding')
@@ -451,7 +451,7 @@ def main():
                 input_ids = prepare_input_from_tokens(prompt_token_ids, config.model.block_size)
             else:
                 # Unconditional generation - start with a special start token
-                start_token_id = token_mapping.get('object09', 1)  # Use object09 as start or fallback to token 1
+                start_token_id = token_mapping.get('object32', 1)  # Use object09 as start or fallback to token 1
                 input_ids = torch.tensor([[start_token_id]], dtype=torch.long)
             
             original_length = input_ids.size(1)
