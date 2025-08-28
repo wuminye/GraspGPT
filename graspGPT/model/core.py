@@ -61,7 +61,7 @@ def count_sb_nodes(ast_node: Union[SB, UNSEG, INPAINT, AMODAL]) -> int:
 
 
 def save_voxels(sequence: list, file_path: str):
-    """将sequence解析成AST，提取所有SB的坐标，保存为带颜色的点云OBJ文件"""
+    """将sequence解析成AST，提取所有SB的坐标，保存为带颜色的点云PLY文件"""
     parser = Parser(sequence)
     ast = parser.parse()
     
@@ -74,11 +74,25 @@ def save_voxels(sequence: list, file_path: str):
         collect_sb_coords(item, coords_with_colors)
     
     with open(file_path, 'w') as f:
-        f.write("# Voxel point cloud generated from AST\n")
-        f.write(f"# Total SBs: {total_sbs}\n")
-        f.write(f"# Total points: {len(coords_with_colors)}\n\n")
+        # PLY header
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"comment Voxel point cloud generated from AST\n")
+        f.write(f"comment Total SBs: {total_sbs}\n")
+        f.write(f"element vertex {len(coords_with_colors)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property uchar red\n")
+        f.write("property uchar green\n")
+        f.write("property uchar blue\n")
+        f.write("end_header\n")
         
+        # Vertex data
         for x, y, z, r, g, b in coords_with_colors:
-            f.write(f"v {x} {y} {z} {r:.3f} {g:.3f} {b:.3f}\n")
+            red = int(r * 255)
+            green = int(g * 255)
+            blue = int(b * 255)
+            f.write(f"{x} {y} {z} {red} {green} {blue}\n")
     
     return len(coords_with_colors)

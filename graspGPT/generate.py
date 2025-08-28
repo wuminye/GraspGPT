@@ -332,9 +332,9 @@ def main():
         print("Mode: Unconditional generation")
     
     # Set random seed
-    torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(args.seed)
+    #torch.manual_seed(args.seed)
+    #if torch.cuda.is_available():
+    #    torch.cuda.manual_seed(args.seed)
     
     try:
         # Load configuration from checkpoint
@@ -489,8 +489,8 @@ def main():
                 from model.core import save_voxels
                 full_sequence = input_ids[0].cpu().numpy().tolist() + decoded
                 decoded_obj = decode_sequence(full_sequence, token_mapping)
-                save_voxels(decoded_obj, f'pred_{i+1}.obj')
-                print(f"Generated output saved as pred_{i+1}.obj: {decoded_obj}")
+                save_voxels(decoded_obj, f'pred_{i+1}.ply')
+                print(f"Generated output saved as pred_{i+1}.ply: {decoded_obj}")
             except Exception as e:
                 print(f"Could not decode/save 3D object: {e}")
                 print(f"Generated tokens: {decoded}")
