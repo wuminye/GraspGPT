@@ -511,6 +511,11 @@ def main():
             "gradient_accumulation_steps": 1,
         })
         
+        # Ensure bf16 is enabled for inference if available in config
+        if ds_config.get("bf16", {}).get("enabled", False):
+            if rank == 0:
+                print("bf16 enabled for inference")
+        
         # Load checkpoint
         model_engine = load_deepspeed_checkpoint(model, args.checkpoint_path, ds_config)
         
@@ -575,7 +580,7 @@ def main():
                 from model.token_manager import  decode_sequence
                 from model.core import save_voxels
                 decoded = decode_sequence(input_ids[0].cpu().numpy().tolist() +decoded, token_mapping)
-                save_voxels( decoded, 'pred.obj')
+                save_voxels( decoded, f'pred_{i+1}.ply')
                 print(f"Generated output: {decoded}")
                 print("-" * 50)
         

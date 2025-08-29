@@ -146,6 +146,8 @@ class graspGPT(nn.Module):
                 attention_dropout=config.attn_pdrop,
                 # RoPE specific settings
                 rope_theta=getattr(config, 'rope_base', 10000.0),
+                # Flash Attention 2 configuration
+                attn_implementation="flash_attention_2" if getattr(config, 'use_flash_attention', True) else "eager",
             )
             self.model = Qwen2ForCausalLM(qwen_config)
             self.num_heads = 1

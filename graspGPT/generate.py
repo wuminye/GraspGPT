@@ -451,7 +451,7 @@ def main():
                 input_ids = prepare_input_from_tokens(prompt_token_ids, config.model.block_size)
             else:
                 # Unconditional generation - start with a special start token
-                start_token_id = token_mapping.get('object32', 1)  # Use object09 as start or fallback to token 1
+                start_token_id = token_mapping.get('object37', 1)  # Use object09 as start or fallback to token 1
                 input_ids = torch.tensor([[start_token_id]], dtype=torch.long)
             
             original_length = input_ids.size(1)
