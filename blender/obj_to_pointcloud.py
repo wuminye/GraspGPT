@@ -153,6 +153,10 @@ def filter_points_by_bbox(pcd: o3d.geometry.PointCloud, bbox_min: np.ndarray, bb
             (points[:, 1] >= bbox_min[1]) & (points[:, 1] <= bbox_max[1]) &
             (points[:, 2] >= bbox_min[2]) & (points[:, 2] <= bbox_max[2]))
     
+    if np.sum(mask) / len(mask) < 0.05:
+        print("Warning: 95% or more points are outside the bounding box")
+        exit(1)
+    
     # Filter points
     filtered_points = points[mask]
     
@@ -339,7 +343,8 @@ def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox
         # Create data list from voxel data
         colors = np.asarray(downsampled_pcd.colors) if len(downsampled_pcd.colors) > 0 else np.full((len(voxel_coordinates), 3), 0.5)
         data_list = create_voxel_data_list(voxel_coordinates, colors)
-        
+        if len(data_list) == 0:
+            print(f"Warning: No voxel data generated for {obj_path.name}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         print(f"Created data list with {len(data_list)} color groups {obj_path.name}")
         return data_list
             
@@ -421,7 +426,9 @@ def main():
         
         # Save current batch data
         if current_batch_data:
-            pth_output_path = Path(output_dir) / f"voxel_data_batch_{batch_count}.pth"
+            import random
+            random_num = random.randint(1000, 9999)
+            pth_output_path = Path(output_dir) / f"voxel_data_batch_{batch_count}_{random_num}.pth"
             data_out = {
                 'voxel_size': voxel_size,
                 'bbox_min': BBOX_MIN,

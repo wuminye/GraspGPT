@@ -5,6 +5,7 @@ from mathutils import Vector
 import random
 import os
 import glob
+import xml.etree.ElementTree as ET
 
 def clear_scene():
     """Clear all mesh objects in the scene"""
@@ -258,6 +259,64 @@ def save_final_meshes(output_dir, imported_objects, object_ids, scene_id=0):
     # Clear selection
     bpy.ops.object.select_all(action='DESELECT')
 
+def save_object_transforms_xml(output_dir, imported_objects, object_ids, scene_id=0):
+    """Save object transform matrices to XML file"""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    # Create root element
+    root = ET.Element("scene")
+    root.set("id", str(scene_id))
+    
+    # Add objects and their transforms
+    for i, obj in enumerate(imported_objects):
+        if obj and obj.name and not obj.name.startswith(('Wall_', 'Floor')):
+            model_id = object_ids[i] if i < len(object_ids) else i
+            
+            # Create object element
+            obj_elem = ET.SubElement(root, "object")
+            obj_elem.set("id", str(model_id))
+            obj_elem.set("name", obj.name)
+            
+            # Get transformation matrix
+            transform_matrix = obj.matrix_world
+            
+            # Add transformation matrix as 4x4 matrix
+            transform_elem = ET.SubElement(obj_elem, "transform")
+            for row in range(4):
+                row_elem = ET.SubElement(transform_elem, "row")
+                row_elem.set("index", str(row))
+                row_values = []
+                for col in range(4):
+                    row_values.append(str(transform_matrix[row][col]))
+                row_elem.text = " ".join(row_values)
+            
+            # Add position (translation)
+            pos_elem = ET.SubElement(obj_elem, "position")
+            pos_elem.set("x", str(obj.location.x))
+            pos_elem.set("y", str(obj.location.y))
+            pos_elem.set("z", str(obj.location.z))
+            
+            # Add rotation (euler angles)
+            rot_elem = ET.SubElement(obj_elem, "rotation")
+            rot_elem.set("x", str(obj.rotation_euler.x))
+            rot_elem.set("y", str(obj.rotation_euler.y))
+            rot_elem.set("z", str(obj.rotation_euler.z))
+            
+            # Add scale
+            scale_elem = ET.SubElement(obj_elem, "scale")
+            scale_elem.set("x", str(obj.scale.x))
+            scale_elem.set("y", str(obj.scale.y))
+            scale_elem.set("z", str(obj.scale.z))
+    
+    # Write to XML file
+    xml_path = os.path.join(output_dir, f"scene_{scene_id:04d}_transforms.xml")
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ", level=0)
+    tree.write(xml_path, encoding='utf-8', xml_declaration=True)
+    
+    print(f"Saved object transforms to {xml_path}")
+
 def simulate_physics_drop_with_preloaded(preloaded_meshes, bbox_min, bbox_max, selected_objects, simulation_frames=250, output_dir=None, scene_id=0):
     """
     Main function: Perform physics simulation with preloaded objects
@@ -339,6 +398,8 @@ def simulate_physics_drop_with_preloaded(preloaded_meshes, bbox_min, bbox_max, s
     if output_dir:
         print(f"Saving final meshes to {output_dir}...")
         save_final_meshes(output_dir, imported_objects, object_ids, scene_id)
+        # Save object transforms to XML
+        save_object_transforms_xml(output_dir, imported_objects, object_ids, scene_id)
     
     print("Physics simulation completed!")
     print(f"Successfully imported and simulated {len(imported_objects)} objects")
@@ -390,8 +451,8 @@ def generate_multiple_scenes(ply_files_folder, bbox_min, bbox_max, num_scenes=10
 if __name__ == "__main__":
     # Configuration parameters
     PLY_FILES_FOLDER = "H:\\code\\GraspGPT\\data\\models"  # Replace with your PLY files path
-    BBOX_MIN = (-0.27, -0.18, 0)    # bbox minimum coordinates (Z-axis up coordinate system)
-    BBOX_MAX = (0.27, 0.18, 0.2)      # bbox maximum coordinates (Z-axis up coordinate system)
+    BBOX_MIN = (-0.3, -0.2, 0)    # bbox minimum coordinates (Z-axis up coordinate system)
+    BBOX_MAX = (0.3, 0.2, 0.25)      # bbox maximum coordinates (Z-axis up coordinate system)
     NUM_SCENES = 2000          # Number of scenes to generate
     SIMULATION_FRAMES = 60   # Physics simulation frames
     OUTPUT_DIR = "H:\\code\\GraspGPT\\output\\synthetic_meshes"  # Directory to save final meshes
