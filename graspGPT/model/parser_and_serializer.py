@@ -14,10 +14,14 @@ from __future__ import annotations
 
 SEQ    → ITEM* 'end'                       # ← 入口规则
 
-ITEM   → SB | UNSEG | INPAINT | AMODAL                       # ITEM 四种形态
+ITEM   → SB | UNSEG | INPAINT | AMODAL | GRASP              # ITEM 五种形态
 
 # —— Labeled segment ---------------------------------------------------------
 SB     → TAG CB+                           # TAG 后至少一个坐标块
+
+# —— Grasp data ---------------------------------------------------------
+GRASP  → 'detectgrasp' GB*                # 'detectgrasp' 后 0⁺ GB
+GB  -> 'grasp' TAG CB+                    # 'grasp' + TAG + 1⁺ CB
 
 # —— Un‑labeled segment ----------------------------------------
 UNSEG  → 'unlabel' CB*                    # 开始：可带 0⁺ 坐标块
@@ -65,7 +69,7 @@ Input is a *flat* Python list where each token is either
     * a 3‑tuple of ints representing a 3D coordinate, e.g. (12, 34, 56).
 
 The parser produces a small Abstract Syntax Tree (AST) composed of
-`Seq`, `SB`, `UNSEG`, and `CB` nodes.  See the `__main__` section at
+`Seq`, `SB`, `UNSEG`, `GRASP`, `GB`, and `CB` nodes.  See the `__main__` section at
 the bottom for a runnable demo.
 """
 
@@ -113,6 +117,16 @@ class CB:
 
 
 @dataclass
+class GB:
+    tag: str  # 抓取标签
+    cbs: List[CB]  # 至少一个坐标块
+
+    def __str__(self) -> str:
+        inner = ", ".join(map(str, self.cbs))
+        return f"GB(tag={self.tag}, [{inner}])"
+
+
+@dataclass
 class SB:
     tag: str  # 形状标签，可以是基础标签（'circle', 'square'）或动态加载的COCO类别
     cbs: List[CB]
@@ -156,8 +170,17 @@ class AMODAL:
 
 
 @dataclass
+class GRASP:
+    gbs: List[GB]  # 'detectgrasp' 后零个或多个GB
+
+    def __str__(self) -> str:
+        inner = ", ".join(map(str, self.gbs))
+        return f"GRASP([{inner}])"
+
+
+@dataclass
 class Seq:
-    items: List[Union[SB, UNSEG, INPAINT, AMODAL]]
+    items: List[Union[SB, UNSEG, INPAINT, AMODAL, GRASP]]
 
     def __str__(self) -> str:
         joined = ",\n  ".join(map(str, self.items))
@@ -199,7 +222,7 @@ class Parser:
         """Parse a SEQ and ensure the final token is 'end'.
         如果解析过程中遇到 ParseError，则忽略后续 token，只用之前成功解析的数据构造合法 AST。
         """
-        items: List[Union[SB, UNSEG, INPAINT]] = []
+        items: List[Union[SB, UNSEG, INPAINT, AMODAL, GRASP]] = []
         while self.current() not in (None, 'end'):
             try:
                 items.append(self._parse_item())
@@ -213,7 +236,7 @@ class Parser:
         return Seq(items)
 
     # ITEM ------------------------------------------------------------------
-    def _parse_item(self) -> Union[SB, UNSEG, INPAINT, AMODAL]:
+    def _parse_item(self) -> Union[SB, UNSEG, INPAINT, AMODAL, GRASP]:
         tok = self.current()
         # 检查是否是形状标签（包括基础标签和动态标签）
         if tok in get_token_manager().shape_tags:
@@ -224,6 +247,8 @@ class Parser:
             return self._parse_inpaint()
         if tok == 'tagfragment':
             return self._parse_amodal()
+        if tok == 'detectgrasp':
+            return self._parse_grasp()
         raise ParseError(f"[parse_item] Unexpected token {tok!r} at position {self.pos}")
 
     # SB --------------------------------------------------------------------
@@ -279,6 +304,28 @@ class Parser:
         self.expect('endamodal')
         return AMODAL(fragment_sbs, amodal_sbs)
 
+    # GRASP -----------------------------------------------------------------
+    def _parse_grasp(self) -> GRASP:
+        self.expect('detectgrasp')
+        gbs: List[GB] = []
+        while self.current() == 'grasp':
+            gbs.append(self._parse_gb())
+        return GRASP(gbs)
+
+    # GB --------------------------------------------------------------------
+    def _parse_gb(self) -> GB:
+        self.expect('grasp')
+        tag = self.current()
+        if tag not in get_token_manager().shape_tags:
+            raise ParseError(f"Expected shape tag after 'grasp', got {tag!r}")
+        self.advance()
+        cbs: List[CB] = []
+        if not self._starts_cb(self.current()):
+            raise ParseError("GB must contain at least one CB after tag")
+        while self._starts_cb(self.current()):
+            cbs.append(self._parse_cb())
+        return GB(tag, cbs)  # type: ignore[arg-type]
+
     # CB --------------------------------------------------------------------
     def _parse_cb(self) -> CB:
         coord_tok = self.current()
@@ -326,6 +373,8 @@ class Serializer:
                 tokens.extend(Serializer._serialize_inpaint(item))
             elif isinstance(item, AMODAL):
                 tokens.extend(Serializer._serialize_amodal(item))
+            elif isinstance(item, GRASP):
+                tokens.extend(Serializer._serialize_grasp(item))
         
         # Add the final 'end' token
         tokens.append('end')
@@ -381,6 +430,28 @@ class Serializer:
         for sb in amodal.amodal_sbs:
             tokens.extend(Serializer._serialize_sb(sb))
         tokens.append('endamodal')
+        return tokens
+    
+    @staticmethod
+    def _serialize_grasp(grasp: GRASP) -> List[Token]:
+        """Serialize a GRASP node to tokens."""
+        tokens: List[Token] = ['detectgrasp']
+        
+        # Add all GB tokens
+        for gb in grasp.gbs:
+            tokens.extend(Serializer._serialize_gb(gb))
+        
+        return tokens
+    
+    @staticmethod
+    def _serialize_gb(gb: GB) -> List[Token]:
+        """Serialize a GB node to tokens."""
+        tokens: List[Token] = ['grasp', gb.tag]
+        
+        # Add all CB tokens
+        for cb in gb.cbs:
+            tokens.extend(Serializer._serialize_cb(cb))
+        
         return tokens
     
     @staticmethod
@@ -484,17 +555,17 @@ if __name__ == '__main__':
     print(f"序列化结果: {serialized5}")
     print(f"往返测试: {'通过' if tokens5 == serialized5 else '失败'}\n")
     
-    # 测试案例6: 错误处理
-    print("测试6: 错误处理测试")
+    # 测试案例8: 错误处理
+    print("测试8: 错误处理测试")
     invalid_tokens = ['object01', 'invalid_coordinate', 'end']
     print(f"输入无效tokens: {invalid_tokens}")
     
-    parser6 = Parser(invalid_tokens)
-    ast6 = parser6.parse()  # 解析器会处理错误并返回部分结果
-    print(f"错误处理后的解析结果:\n{ast6}")
+    parser8 = Parser(invalid_tokens)
+    ast8 = parser8.parse()  # 解析器会处理错误并返回部分结果
+    print(f"错误处理后的解析结果:\n{ast8}")
     
     # 测试序列标签验证
-    print("\n测试7: 序列标签验证")
+    print("\n测试9: 序列标签验证")
     valid_serial = '<serial100>'
     invalid_serial = '<serial300>'
     print(f"'{valid_serial}' 是否有效: {token_manager.is_serial_token(valid_serial)}")
@@ -504,5 +575,36 @@ if __name__ == '__main__':
     print(f"'object01' 是否为形状标签: {token_manager.is_shape_tag('object01')}")
     print(f"'invalid_shape' 是否为形状标签: {token_manager.is_shape_tag('invalid_shape')}")
     
+    # 测试案例6: GRASP结构
+    print("测试6: GRASP结构")
+    tokens6 = [
+        'detectgrasp', 
+        'grasp', 'object01', (10, 20, 30), '<serial5>',
+        'grasp', 'object02', (40, 50, 60), (70, 80, 90),
+        'end'
+    ]
+    print(f"输入tokens: {tokens6}")
+    
+    parser6 = Parser(tokens6)
+    ast6 = parser6.parse()
+    print(f"解析结果:\n{ast6}")
+    
+    serialized6 = Serializer.serialize(ast6)
+    print(f"序列化结果: {serialized6}")
+    print(f"往返测试: {'通过' if tokens6 == serialized6 else '失败'}\n")
+    
+    # 测试案例7: 空GRASP结构
+    print("测试7: 空GRASP结构")
+    tokens7 = ['detectgrasp', 'end']
+    print(f"输入tokens: {tokens7}")
+    
+    parser7 = Parser(tokens7)
+    ast7 = parser7.parse()
+    print(f"解析结果:\n{ast7}")
+    
+    serialized7 = Serializer.serialize(ast7)
+    print(f"序列化结果: {serialized7}")
+    print(f"往返测试: {'通过' if tokens7 == serialized7 else '失败'}\n")
+
     print("\n=== 所有测试完成 ===")
   

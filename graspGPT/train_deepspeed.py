@@ -55,9 +55,9 @@ def get_default_config():
     
     # Model configuration
     C.model = graspGPT.get_default_config()
-    C.model.model_type = 'gopher-44m'  # or specify custom n_layer, n_head, n_embd
+    C.model.model_type = 'gpt-nano'  # or specify custom n_layer, n_head, n_embd
     C.model.vocab_size = None  # Will be set from dataset
-    C.model.block_size = 4096   # Maximum sequence length
+    C.model.block_size = 8192   # Maximum sequence length
     C.model.use_rope = True    # Use RoPE position encoding
     C.model.use_flash_attention = True
     
@@ -79,8 +79,8 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/pointclouds/"
-    C.dataset.max_sequence_length = 3096
-    C.dataset.num_workers = 4
+    C.dataset.max_sequence_length = 3596
+    C.dataset.num_workers = 12
     C.dataset.weights_only = False
     
     # System configuration

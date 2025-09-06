@@ -8,3 +8,4 @@
 /wandb
 *.obj
 *.png
+/blender/__pycache__

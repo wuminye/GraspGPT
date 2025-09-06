@@ -27,8 +27,8 @@ echo "Additional arguments: $@"
 # batch_size will be automatically calculated based on micro_batch_size and world_size
 deepspeed --num_gpus=$NUM_GPUS train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
-    --batch_size 20 \
-    --micro_batch_size 5 \
+    --batch_size 2 \
+    --micro_batch_size 2 \
     --learning_rate 3e-4 \
     --max_iters 200000 \
     --wandb_project "graspgpt-deepspeed" \

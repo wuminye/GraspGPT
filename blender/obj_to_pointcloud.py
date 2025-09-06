@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple, Optional
 import torch
 from multiprocessing import Pool, cpu_count
 import trimesh
+import xml.etree.ElementTree as ET
 
 def parse_mtl_file(mtl_path: str) -> Dict[str, np.ndarray]:
     """Parse MTL file and extract material colors (Kd - diffuse color)"""
@@ -235,10 +236,7 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
             voxel_center = grid_origin + (np.array(voxel_key) + 0.5) * voxel_size
         else:
             voxel_center = (np.array(voxel_key) + 0.5) * voxel_size
-        downsampled_points.append(voxel_center)
-        
-        # Store integer voxel coordinates
-        voxel_coordinates.append(voxel_key)
+       
         
         # Most frequent color
         if voxel_data['colors']:
@@ -246,9 +244,16 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
             # Convert to integers and find most frequent color
             int_colors = colors.astype(int)
             unique_colors, counts = np.unique(int_colors, axis=0, return_counts=True)
+            if np.max(counts) < 2:
+                continue
             most_frequent_color = unique_colors[np.argmax(counts)]
             most_frequent_color = most_frequent_color.astype(np.float32) / 255.0  # Normalize back to [0, 1]
             downsampled_colors.append(most_frequent_color)
+            
+            downsampled_points.append(voxel_center)
+        
+            # Store integer voxel coordinates
+            voxel_coordinates.append(voxel_key)
 
     # Create new point cloud
     downsampled_pcd = o3d.geometry.PointCloud()
@@ -258,6 +263,76 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
         downsampled_pcd.colors = o3d.utility.Vector3dVector(np.array(downsampled_colors))
     
     return downsampled_pcd, voxel_coordinates
+
+def parse_transform_xml(xml_path: str) -> Dict[int, Dict]:
+    """Parse XML file and extract object transform matrices"""
+    transforms = {}
+    
+    if not os.path.exists(xml_path):
+        print(f"Warning: Transform XML file not found: {xml_path}")
+        return transforms
+    
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        
+        for obj_elem in root.findall('object'):
+            obj_id = int(obj_elem.get('id'))
+            obj_name = obj_elem.get('name')
+            
+            transform_data = {
+                'name': obj_name,
+                'transform_matrix': None,
+                'position': None,
+                'rotation': None,
+                'scale': None
+            }
+            
+            # Parse transformation matrix
+            transform_elem = obj_elem.find('transform')
+            if transform_elem is not None:
+                matrix_rows = []
+                for row_elem in transform_elem.findall('row'):
+                    row_values = [float(x) for x in row_elem.text.split()]
+                    matrix_rows.append(row_values)
+                if len(matrix_rows) == 4:
+                    transform_data['transform_matrix'] = np.array(matrix_rows)
+            
+            # Parse position
+            pos_elem = obj_elem.find('position')
+            if pos_elem is not None:
+                transform_data['position'] = [
+                    float(pos_elem.get('x')),
+                    float(pos_elem.get('y')),
+                    float(pos_elem.get('z'))
+                ]
+            
+            # Parse rotation
+            rot_elem = obj_elem.find('rotation')
+            if rot_elem is not None:
+                transform_data['rotation'] = [
+                    float(rot_elem.get('x')),
+                    float(rot_elem.get('y')),
+                    float(rot_elem.get('z'))
+                ]
+            
+            # Parse scale
+            scale_elem = obj_elem.find('scale')
+            if scale_elem is not None:
+                transform_data['scale'] = [
+                    float(scale_elem.get('x')),
+                    float(scale_elem.get('y')),
+                    float(scale_elem.get('z'))
+                ]
+            
+            transforms[obj_id] = transform_data
+        
+        print(f"Loaded transforms for {len(transforms)} objects from {xml_path}")
+        
+    except Exception as e:
+        print(f"Error parsing XML file {xml_path}: {e}")
+    
+    return transforms
 
 def create_voxel_data_list(voxel_coordinates: List[Tuple], colors: np.ndarray) -> List[Tuple]:
     """Create list of (color_255, coordinates_tensor) tuples from voxel data"""
@@ -356,13 +431,13 @@ def main():
     # Configuration - use bbox from blender.py
     input_dir = "../output/synthetic_meshes"
     output_dir = "../output/pointclouds"
-    voxel_size = 0.01  # 1cm voxels
+    voxel_size = 0.0075  # 1cm voxels
     sample_points = 10000  # Number of points to sample from each mesh
     use_multiprocessing = True  # Switch to enable/disable multiprocessing
     
     # BBox definition from blender.py (Z-axis up coordinate system)
-    BBOX_MIN = np.array([-0.27, -0.18, 0])    # bbox minimum coordinates (Z-up)
-    BBOX_MAX = np.array([0.27, 0.18, 0.2])     # bbox maximum coordinates (Z-up)
+    BBOX_MIN = np.array([-0.3, -0.2, 0])    # bbox minimum coordinates (Z-up)
+    BBOX_MAX = np.array([0.3, 0.2, 0.25])     # bbox maximum coordinates (Z-up)
     
     # Calculate and print volume information
     volume_size = BBOX_MAX - BBOX_MIN
@@ -398,6 +473,9 @@ def main():
         
         print(f"\nProcessing batch {batch_count}: files {batch_start+1}-{batch_end} of {total_files}")
         
+        # Track successful files to maintain data-transform correspondence
+        successful_files = []
+        
         if use_multiprocessing:
             # Use multiprocessing to process current batch in parallel
             num_processes = min(cpu_count(), len(current_batch_args))
@@ -409,6 +487,7 @@ def main():
                 for obj_path, data_list in results:
                     if data_list is not None:
                         current_batch_data.append(data_list)
+                        successful_files.append(obj_path)
                         success_count += 1
                     else:
                         print(f"Failed to process: {obj_path}")
@@ -420,6 +499,7 @@ def main():
                 obj_path, data_list = process_single_obj(args)
                 if data_list is not None:
                     current_batch_data.append(data_list)
+                    successful_files.append(obj_path)
                     success_count += 1
                 else:
                     print(f"Failed to process: {obj_path}")
@@ -429,12 +509,24 @@ def main():
             import random
             random_num = random.randint(1000, 9999)
             pth_output_path = Path(output_dir) / f"voxel_data_batch_{batch_count}_{random_num}.pth"
+            
+            # Collect transform data only for successfully processed files
+            batch_transforms = []
+            for obj_path in successful_files:
+                obj_path = Path(obj_path)
+                xml_path = obj_path.with_name(obj_path.stem + '_transforms.xml')
+                scene_transforms = parse_transform_xml(str(xml_path))
+                batch_transforms.append(scene_transforms)  # Always append (empty dict if no transforms)
+                print(f"Parsed transforms for: {obj_path.stem}")
+
+            
             data_out = {
                 'voxel_size': voxel_size,
                 'bbox_min': BBOX_MIN,
                 'bbox_max': BBOX_MAX,
                 'volume_dims': volume_dims,
                 'data_lists': current_batch_data,
+                'transforms': batch_transforms,  # Add transforms data
                 'batch_info': {
                     'batch_number': batch_count,
                     'files_in_batch': len(current_batch_data),
@@ -442,7 +534,7 @@ def main():
                 }
             }
             torch.save(data_out, str(pth_output_path))
-            print(f"Saved batch {batch_count} with {len(current_batch_data)} data lists to: {pth_output_path}")
+            print(f"Saved batch {batch_count} with {len(current_batch_data)} data lists and {len(batch_transforms)} transform sets to: {pth_output_path}")
         
         batch_count += 1
     

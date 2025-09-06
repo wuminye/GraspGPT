@@ -23,7 +23,7 @@ def pad_collate(batch):
         x: (b x t x g)
         y: (b x t x g)
     """
-    tokens, max_sequence_length = zip(*batch)
+    tokens, max_sequence_length,_ = zip(*batch)
     max_length = max_sequence_length[0]
 
     chunks = []

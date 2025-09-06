@@ -23,7 +23,8 @@ class TokenManager:
         self._max_serial_value = 240
         
         # 命令标签，需要出现在AST中
-        self._command_tokens = ['unlabel', 'segment', 'endunseg', 'fragment', 'inpaint', 'endinpaint', 'tagfragment', 'amodal', 'endamodal', 'end', 'feat']
+        self._command_tokens = ['unlabel', 'segment', 'endunseg', 'fragment', 'inpaint', 'endinpaint', 'tagfragment', 'amodal', 'endamodal', 'end', 'feat', 
+                                'detectgrasp', 'grasp']
         
         # 动态标签列表
         self._dynamic_tags = []

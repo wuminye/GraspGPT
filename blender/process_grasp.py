@@ -647,7 +647,7 @@ class GraspGroup():
         - GraspGroup instance of sample grasps.
         '''
         if numGrasp > self.__len__():
-            raise ValueError('Number of sampled grasp should be no more than the total number of grasps in the group')
+            numGrasp = self.__len__()
         shuffled_grasp_group_array = copy.deepcopy(self.grasp_group_array)
         np.random.shuffle(shuffled_grasp_group_array)
         shuffled_grasp_group = GraspGroup()
