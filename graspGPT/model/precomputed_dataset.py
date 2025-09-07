@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Tuple, Dict, List
 import numpy as np
 import glob
+import random
 
 try:
     from .token_manager import get_token_manager
