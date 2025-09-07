@@ -52,6 +52,11 @@ class PrecomputedDataset(Dataset):
             volume_dims = self.data[0]['volume_dims']
             self.token_mapping = token_manager.generate_mapping(volume_dims[0], volume_dims[1], volume_dims[2])
             self.tokenizer_fn = self._create_tokenizer(self.token_mapping)
+
+            self.volume_dims = volume_dims
+            self.bbox_min = self.data[0]['bbox_min']
+            self.bbox_max = self.data[0]['bbox_max']
+            self.voxel_size = self.data[0]['voxel_size']
         else:
             raise ValueError("No data loaded")
     
@@ -116,6 +121,7 @@ class PrecomputedDataset(Dataset):
     def __len__(self) -> int:
         """Return the number of samples in the dataset"""
         return len(self.data)
+
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
@@ -226,6 +232,8 @@ class PrecomputedDataset(Dataset):
                     gb = GB(tag=shape_tag, cbs=cbs)
                     gb_blocks.append(gb)
         
+        # Randomly shuffle GB blocks for data diversity
+        random.shuffle(gb_blocks)
         # Create GRASP item with all GB blocks
         grasp_item = GRASP(gbs=gb_blocks)
         
