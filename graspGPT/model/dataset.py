@@ -295,9 +295,9 @@ class VoxelDataset(Dataset):
 
         
         tokens = torch.tensor(token_sequence, dtype=torch.long)
-        #grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
+        grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
 
-        #tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
+        tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
         
         # Handle sequence length
         seq_len = tokens.shape[0]
@@ -603,7 +603,7 @@ class VoxelDataset(Dataset):
                     grasp_mesh.transform(final_transform)
                     # 将三角网格转换为点云（采样表面点）
                     if hasattr(grasp_mesh, 'vertices') and len(grasp_mesh.vertices) > 0:
-                        grasp_pcd = grasp_mesh.sample_points_uniformly(number_of_points=80)
+                        grasp_pcd = grasp_mesh.sample_points_uniformly(number_of_points=100)
                         all_grasp_points.append(np.asarray(grasp_pcd.points))
                         
                 all_grasp_points = np.stack(all_grasp_points) # SIze: [num_grasps, 100, 3]

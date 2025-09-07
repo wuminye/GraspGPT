@@ -117,7 +117,7 @@ def main():
     random_id = random.randint(10000, 99999)
     
     # 使用多进程处理
-    num_processes = max(min(os.cpu_count(), len(dataset)),32)
+    num_processes = min(os.cpu_count(), len(dataset))
     print(f"使用 {num_processes} 个进程并行处理")
     
     # 创建初始化函数，传递数据集

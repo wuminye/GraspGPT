@@ -26,20 +26,20 @@ from deepspeed import comm as dist
 # Import local modules
 try:
     from model.model import graspGPT
-    from model.dataset import VoxelDataset
+    from model.precomputed_dataset import PrecomputedDataset
     from model.trainer import pad_collate
     from model.utils import CfgNode as CN
 except ImportError:
     # Handle different import paths
     try:
         from .model.model import graspGPT
-        from .model.dataset import VoxelDataset
+        from .model.precomputed_dataset import PrecomputedDataset
         from .model.trainer import pad_collate
         from .model.utils import CfgNode as CN
     except ImportError:
         sys.path.append(os.path.dirname(os.path.abspath(__file__)))
         from model.model import graspGPT
-        from model.dataset import VoxelDataset
+        from model.precomputed_dataset import PrecomputedDataset
         from model.trainer import pad_collate
         from model.utils import CfgNode as CN
 
@@ -78,7 +78,7 @@ def get_default_config():
     
     # Dataset configuration
     C.dataset = CN()
-    C.dataset.data_path = "../output/pointclouds/"
+    C.dataset.data_path = "../output/precomputed_data/"
     C.dataset.max_sequence_length = 3596
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
@@ -287,10 +287,9 @@ def create_model_and_dataset(config):
     if rank == 0:
         print("Setting up dataset...")
     
-    dataset = VoxelDataset(
+    dataset = PrecomputedDataset(
         data_path=config.dataset.data_path,
-        max_sequence_length=config.dataset.max_sequence_length,
-        weights_only=config.dataset.weights_only
+        max_sequence_length=config.dataset.max_sequence_length
     )
     
     if rank == 0:
