@@ -18,7 +18,7 @@ from graspGPT.model.core import save_voxels
 from graspGPT.model.token_manager import get_token_manager
 
 
-Repeat_times = 10
+Repeat_times = 6
 
 
 def convert_to_uint8(data):
@@ -117,7 +117,7 @@ def main():
     random_id = random.randint(10000, 99999)
     
     # 使用多进程处理
-    num_processes = min(os.cpu_count(), len(dataset))
+    num_processes = max(min(os.cpu_count(), len(dataset)),32)
     print(f"使用 {num_processes} 个进程并行处理")
     
     # 创建初始化函数，传递数据集
@@ -150,4 +150,5 @@ def main():
     print(f"总共保存了 {total_saved} 个样本，分为 {batch_count + 1} 个文件")
 
 if __name__ == "__main__":
+    print("Repeat_times =", Repeat_times)
     main()
