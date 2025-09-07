@@ -365,7 +365,7 @@ def create_voxel_data_list(voxel_coordinates: List[Tuple], colors: np.ndarray) -
         # Sort coordinates by (x, y, z)
         coords.sort(key=lambda x: (x[0], x[1], x[2]))
         # Convert to tensor
-        coord_tensor = torch.tensor(coords, dtype=torch.int32)
+        coord_tensor = torch.tensor(coords, dtype=torch.uint8)
         result_list.append((color_255, coord_tensor))
     
     return result_list

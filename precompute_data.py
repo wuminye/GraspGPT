@@ -18,7 +18,7 @@ from graspGPT.model.core import save_voxels
 from graspGPT.model.token_manager import get_token_manager
 
 
-Repeat_times = 30
+Repeat_times = 10
 
 
 def convert_to_uint8(data):
@@ -59,7 +59,11 @@ def process_single_ind(ind):
             'voxel_data': voxel_data_uint8,
             'scene_grasps': scene_grasps_uint8,
             'ind': ind,
-            'repeat': j
+            'repeat': j,
+            'volume_dims': global_dataset.volume_dims,
+            'bbox_min': global_dataset.bbox_min if hasattr(global_dataset, 'bbox_min') else None,
+            'bbox_max': global_dataset.bbox_max if hasattr(global_dataset, 'bbox_max') else None,
+            'voxel_size': global_dataset.voxel_size if hasattr(global_dataset, 'voxel_size') else None
         })
     
     return results
