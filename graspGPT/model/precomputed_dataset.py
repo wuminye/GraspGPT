@@ -82,7 +82,7 @@ class PrecomputedDataset(Dataset):
         print(f"Loaded {len(all_data)} precomputed samples from {len(pth_files)} files")
         return all_data
     
-   def _create_tokenizer(self, token_mapping: dict) -> Callable:
+    def _create_tokenizer(self, token_mapping: dict) -> Callable:
         """
         Create a real tokenizer based on parser_and_serializer.py grammar definitions.
         
