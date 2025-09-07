@@ -82,38 +82,79 @@ class PrecomputedDataset(Dataset):
         print(f"Loaded {len(all_data)} precomputed samples from {len(pth_files)} files")
         return all_data
     
-    def _create_tokenizer(self, token_mapping: dict):
-        """Create tokenizer function for voxel data"""
+   def _create_tokenizer(self, token_mapping: dict) -> Callable:
+        """
+        Create a real tokenizer based on parser_and_serializer.py grammar definitions.
+        
+        Args:
+            token_mapping: Dictionary mapping tokens to token IDs
+            
+        Returns:
+            function: Tokenizer function
+        """
+
+        
+        
+        
         def tokenizer_fn(voxel_data):
-            # Use the same tokenization logic as VoxelDataset
+            """
+            Convert entire voxel_data sample to a sequence of token IDs using grammar definitions
+            
+            Args:
+                voxel_data: List of (color, coordinates) tuples representing one sample
+                
+            Returns:
+                list: List of token IDs following grammar structure
+            """
+            # Step 1: Collect all SBs from the sample
             sbs = []
+            
+            # Randomly shuffle the voxel_data order
+            random.shuffle(voxel_data)
+            
             for color, coordinates in voxel_data:
-                # Map color to shape tag
+                # Map color to shape tag - use object tags based on color value
                 if 0 <= color <= 87:
-                    shape_tag = f'object{color:02d}'
+                    shape_tag = f'object{color:02d}'  # object00 to object87
                 else:
-                    shape_tag = 'unknow'
+                    shape_tag = 'unknow'  # fallback for out-of-range colors
                 
-                # Create coordinate blocks
+                # Create coordinate blocks (CB) from coordinates
                 cbs = []
-                coords_list = coordinates.tolist() if hasattr(coordinates, 'tolist') else coordinates
+                coords_list = coordinates.tolist()
                 
-                for coord in coords_list:
-                    x, y, z = int(coord[0]), int(coord[1]), int(coord[2])
-                    cb = CB(coord=(x, y, z))
+                for i, coord in enumerate(coords_list):
+                    x, y, z = coord
+                    # Ensure coordinates are integers and within bounds
+                    x, y, z = int(x), int(y), int(z)
+                    coord_tuple = (x, y, z)
+                    
+                    # Create CB with coordinate
+                    cb = CB(coord=coord_tuple)
                     cbs.append(cb)
                 
+                # Create SB (Segment Block) with the shape tag and coordinate blocks
                 sb = SB(tag=shape_tag, cbs=cbs)
                 sbs.append(sb)
             
+            # Step 2: Create sequence with all SBs from this sample
             seq = Seq(items=sbs)
+            
+            # Step 3: Serialize AST to flat token list
             flat_tokens = Serializer.serialize(seq)
             
-            # Convert to token IDs
+            # Step 4: Convert flat tokens to token IDs using token_manager mapping
             token_ids = []
+            
             for token in flat_tokens:
                 if token in token_mapping:
                     token_ids.append(token_mapping[token])
+                else:
+                    # Handle unknown tokens - could add to mapping or use special token
+                    print(f"Warning: Unknown token '{token}' not in mapping")
+                    # For robustness, you might want to add a special <UNK> token
+                    # For now, we'll skip unknown tokens
+                    continue
             
             return token_ids
         
