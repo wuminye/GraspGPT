@@ -187,6 +187,47 @@ class VoxelDataset(Dataset):
     def __len__(self) -> int:
         """Return the number of samples in the dataset"""
         return len(self.data)
+
+    def prepare_data(self, idx: int):
+        """
+        Get a single sample from the dataset
+        
+        Args:
+            idx (int): Sample index
+            
+        Returns:
+            tuple: (tokens, max_sequence_length, scene_grasps)
+                - tokens: torch.Tensor of token sequence
+                - max_sequence_length: int, maximum sequence length
+                - scene_grasps: Dict mapping object_id to transformed grasp arrays
+        """
+        # Get the raw voxel data for this sample
+        voxel_data = self.data[idx]
+        
+        # 检测当前数据中出现的Object id
+        detected_object_ids = set()
+        for color, _ in voxel_data:
+            if 0 <= color <= 87:  # 有效的object id范围
+                detected_object_ids.add(color)
+        
+        # 获取对应的transforms信息
+        scene_transforms = {}
+        if idx < len(self.transforms) and isinstance(self.transforms[idx], dict):
+            # 只保留检测到的object_id的transforms
+            full_transforms = self.transforms[idx]
+            for obj_id in detected_object_ids:
+                if obj_id in full_transforms:
+                    scene_transforms[obj_id] = full_transforms[obj_id]
+
+        scene_grasps = None
+        # 提取并变换grasp信息
+        scene_grasps = self._extract_object_grasps(scene_transforms)
+        
+        
+        # 过滤与场景occupancy碰撞的grasps
+        scene_grasps = self._filter_colliding_grasps(scene_grasps, voxel_data, self.max_grasps_per_object)
+
+        return voxel_data, scene_grasps
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
@@ -218,18 +259,18 @@ class VoxelDataset(Dataset):
             for obj_id in detected_object_ids:
                 if obj_id in full_transforms:
                     scene_transforms[obj_id] = full_transforms[obj_id]
-                    
+
         scene_grasps = None
         # 提取并变换grasp信息
-        #scene_grasps = self._extract_object_grasps(scene_transforms)
+        scene_grasps = self._extract_object_grasps(scene_transforms)
         
         
         # 过滤与场景occupancy碰撞的grasps
-        #scene_grasps = self._filter_colliding_grasps(scene_grasps, voxel_data, self.max_grasps_per_object)
+        scene_grasps = self._filter_colliding_grasps(scene_grasps, voxel_data, self.max_grasps_per_object)
 
 
         
-       # grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps)
+        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps)
 
         
         
@@ -537,7 +578,7 @@ class VoxelDataset(Dataset):
                 grasp_group = process_grasp_data({obj_id: grasp_data}, obj_id, 
                                                fric_coef_thresh=0.3, grasp_height=0.02)
 
-                grasp_group = grasp_group.random_sample(numGrasp = 500).to_open3d_geometry_list()  
+                grasp_group = grasp_group.random_sample(numGrasp = 300).to_open3d_geometry_list()  
                 
 
 
