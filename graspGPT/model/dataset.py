@@ -576,9 +576,9 @@ class VoxelDataset(Dataset):
             # Process grasp data to get grasp group
             try:
                 grasp_group = process_grasp_data({obj_id: grasp_data}, obj_id, 
-                                               fric_coef_thresh=0.3, grasp_height=0.02)
+                                               fric_coef_thresh=0.35, grasp_height=0.02)
 
-                grasp_group = grasp_group.random_sample(numGrasp = 300).to_open3d_geometry_list()  
+                grasp_group = grasp_group.random_sample(numGrasp = 3000).to_open3d_geometry_list()  
                 
 
 
@@ -701,7 +701,7 @@ class VoxelDataset(Dataset):
 
             if valid_grasps:
                 # Apply random sampling if max_grasps_per_object is specified
-                if max_grasps_per_object is not None and len(valid_grasps) > max_grasps_per_object:
+                if max_grasps_per_object is not None and len(valid_grasps) > max_grasps_per_object and max_grasps_per_object >= 0:
                     # Randomly sample max_grasps_per_object grasps
                     sampled_indices = random.sample(range(len(valid_grasps)), max_grasps_per_object)
                     valid_grasps = [valid_grasps[i] for i in sampled_indices]
