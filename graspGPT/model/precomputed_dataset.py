@@ -250,6 +250,7 @@ class PrecomputedDataset(Dataset):
             if not grasp_list:
                 continue
                 
+            local_gbs = []
             # Map object_id to shape tag
             if 0 <= obj_id <= 87:
                 shape_tag = f'object{obj_id:02d}'  # object00 to object87
@@ -273,7 +274,11 @@ class PrecomputedDataset(Dataset):
                     # Sort CBs by coordinates for consistent ordering
                     cbs.sort(key=lambda cb: cb.coord)
                     gb = GB(tag=shape_tag, cbs=cbs)
-                    gb_blocks.append(gb)
+                    local_gbs.append(gb)
+
+            if len(local_gbs) > 0:
+                random.shuffle(local_gbs)
+                gb_blocks.append(local_gbs[0])
         
         # Randomly shuffle GB blocks for data diversity
         random.shuffle(gb_blocks)

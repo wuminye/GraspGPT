@@ -435,6 +435,7 @@ def main():
     parser.add_argument("--output_dir", default="../output/pointclouds", help="Output directory for point clouds")
     parser.add_argument("--voxel_size", type=float, default=0.01, help="Voxel size for downsampling")
     parser.add_argument("--sample_points", type=int, default=100000, help="Number of points to sample from each mesh")
+    parser.add_argument("--skips", type=int, default=0)
     parser.add_argument("--no_multiprocessing", action="store_true", help="Disable multiprocessing")
     
     args = parser.parse_args()
@@ -479,7 +480,7 @@ def main():
     total_files = len(args_list)
     
     # Process files in batches
-    for batch_start in range(0, total_files, batch_size):
+    for batch_start in range(args.skips, total_files, batch_size):
         batch_end = min(batch_start + batch_size, total_files)
         current_batch_args = args_list[batch_start:batch_end]
         current_batch_data = []
