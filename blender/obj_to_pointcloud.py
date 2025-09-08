@@ -14,6 +14,7 @@ import torch
 from multiprocessing import Pool, cpu_count
 import trimesh
 import xml.etree.ElementTree as ET
+import argparse
 
 def parse_mtl_file(mtl_path: str) -> Dict[str, np.ndarray]:
     """Parse MTL file and extract material colors (Kd - diffuse color)"""
@@ -244,8 +245,8 @@ def voxel_downsample_with_colors(pcd: o3d.geometry.PointCloud, voxel_size: float
             # Convert to integers and find most frequent color
             int_colors = colors.astype(int)
             unique_colors, counts = np.unique(int_colors, axis=0, return_counts=True)
-            if np.max(counts) < 2:
-                continue
+            #if np.max(counts) < 2:
+            #    continue
             most_frequent_color = unique_colors[np.argmax(counts)]
             most_frequent_color = most_frequent_color.astype(np.float32) / 255.0  # Normalize back to [0, 1]
             downsampled_colors.append(most_frequent_color)
@@ -428,12 +429,22 @@ def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox
         return None
 
 def main():
-    # Configuration - use bbox from blender.py
-    input_dir = "../output/synthetic_meshes"
-    output_dir = "../output/pointclouds"
-    voxel_size = 0.0075  # 1cm voxels
-    sample_points = 10000  # Number of points to sample from each mesh
-    use_multiprocessing = True  # Switch to enable/disable multiprocessing
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Convert OBJ files to colored point clouds")
+    parser.add_argument("--input_dir", default="../output/synthetic_meshes", help="Directory containing OBJ files to process")
+    parser.add_argument("--output_dir", default="../output/pointclouds", help="Output directory for point clouds")
+    parser.add_argument("--voxel_size", type=float, default=0.01, help="Voxel size for downsampling")
+    parser.add_argument("--sample_points", type=int, default=10000, help="Number of points to sample from each mesh")
+    parser.add_argument("--no_multiprocessing", action="store_true", help="Disable multiprocessing")
+    
+    args = parser.parse_args()
+    
+    # Configuration
+    input_dir = args.input_dir
+    output_dir = args.output_dir
+    voxel_size = args.voxel_size
+    sample_points = args.sample_points
+    use_multiprocessing = not args.no_multiprocessing
     
     # BBox definition from blender.py (Z-axis up coordinate system)
     BBOX_MIN = np.array([-0.3, -0.2, 0])    # bbox minimum coordinates (Z-up)
