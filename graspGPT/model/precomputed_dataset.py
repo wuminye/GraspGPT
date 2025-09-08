@@ -177,6 +177,7 @@ class PrecomputedDataset(Dataset):
         # Extract precomputed data
         voxel_data = sample['voxel_data']
         scene_grasps = sample['scene_grasps']
+
         
         grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps)
 

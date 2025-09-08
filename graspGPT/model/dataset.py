@@ -576,9 +576,9 @@ class VoxelDataset(Dataset):
             # Process grasp data to get grasp group
             try:
                 grasp_group = process_grasp_data({obj_id: grasp_data}, obj_id, 
-                                               fric_coef_thresh=0.35, grasp_height=0.02)
+                                               fric_coef_thresh=0.4, grasp_height=0.02)
 
-                grasp_group = grasp_group.random_sample(numGrasp = 3000).to_open3d_geometry_list()  
+                grasp_group = grasp_group.random_sample(numGrasp = 10000).to_open3d_geometry_list()  
                 
 
 
@@ -603,10 +603,10 @@ class VoxelDataset(Dataset):
                     grasp_mesh.transform(final_transform)
                     # 将三角网格转换为点云（采样表面点）
                     if hasattr(grasp_mesh, 'vertices') and len(grasp_mesh.vertices) > 0:
-                        grasp_pcd = grasp_mesh.sample_points_uniformly(number_of_points=100)
+                        grasp_pcd = grasp_mesh.sample_points_uniformly(number_of_points=300)
                         all_grasp_points.append(np.asarray(grasp_pcd.points))
                         
-                all_grasp_points = np.stack(all_grasp_points) # SIze: [num_grasps, 100, 3]
+                all_grasp_points = np.stack(all_grasp_points) # SIze: [num_grasps, 300, 3]
                 
                 # Store transformed grasps
                 scene_grasps[obj_id] = all_grasp_points
