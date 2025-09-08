@@ -458,7 +458,7 @@ def main():
     print(f"Total voxels in volume: {np.prod(volume_dims)}")
     print(f"Voxel size: {voxel_size}m")
 
-    input("press Enter to continue...")
+    #input("press Enter to continue...")
     
     # Create output directory
     Path(output_dir).mkdir(exist_ok=True)
