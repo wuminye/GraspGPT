@@ -9,3 +9,5 @@
 *.obj
 *.png
 /blender/__pycache__
+/graspGPT/output
+/__pycache__

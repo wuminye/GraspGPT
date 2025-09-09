@@ -51,6 +51,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import numpy as np
 import deepspeed
 from deepspeed import comm as dist
 
@@ -353,9 +354,9 @@ def main():
                        help='Path to file containing prompt token IDs (one per line or comma-separated)')
     parser.add_argument('--max_new_tokens', type=int, default=50,
                        help='Maximum number of new tokens to generate')
-    parser.add_argument('--temperature', type=float, default=1.0,
+    parser.add_argument('--temperature', type=float, default=0.3,
                        help='Sampling temperature (1.0 = no change, >1.0 = more random, <1.0 = more deterministic)')
-    parser.add_argument('--do_sample', action='store_true',
+    parser.add_argument('--do_sample', action='store_true', default=True,
                        help='Use sampling instead of greedy decoding')
     parser.add_argument('--top_k', type=int, default=None,
                        help='Top-k sampling (only consider top k tokens)')
@@ -578,9 +579,24 @@ def main():
                 })
                 
                 from model.token_manager import  decode_sequence
-                from model.core import save_voxels
-                decoded = decode_sequence(input_ids[0].cpu().numpy().tolist() +decoded, token_mapping)
-                save_voxels( decoded, f'pred_{i+1}.ply')
+                import sys
+                sys.path.append('..')
+                from extract_sample_and_export import visualize_tokens
+                
+                # 获取数据集参数用于可视化
+                volume_dims = (80,54,34)  # 根据实际情况调整
+                bbox_min = np.array([-0.3, -0.2, 0])  # 根据实际情况调整
+                voxel_size = 0.0075  # 根据实际情况调整
+                
+                # 使用extract_sample_and_export中的可视化函数
+                visualize_tokens(
+                    tokens=input_ids[0].cpu().numpy().tolist() + decoded,
+                    token_mapping=token_mapping,
+                    volume_dims=volume_dims,
+                    bbox_min=bbox_min,
+                    voxel_size=voxel_size,
+                    output_dir=f"./output/generation_visual/pred_{i+1}"
+                )
                 print(f"Generated output: {decoded}")
                 print("-" * 50)
         
