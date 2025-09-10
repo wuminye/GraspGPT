@@ -217,9 +217,9 @@ class PrecomputedDataset(Dataset):
             # Truncate if too long
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
-        
-        return tokens, self.max_sequence_length, scene_grasps
-    
+
+        return tokens, seq_len, scene_grasps
+
     def get_vocab_size(self) -> int:
         """Get vocabulary size from token_manager"""
         return len(self.token_mapping)
