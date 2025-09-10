@@ -217,6 +217,7 @@ class PrecomputedDataset(Dataset):
             # Truncate if too long
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
+        
 
         return tokens, seq_len, scene_grasps
 
@@ -278,7 +279,10 @@ class PrecomputedDataset(Dataset):
 
             if len(local_gbs) > 0:
                 random.shuffle(local_gbs)
-                gb_blocks.append(local_gbs[0])
+                # Randomly select 1 to 5 elements
+                n = random.randint(2, min(5, len(local_gbs)))
+                gb_blocks.extend(local_gbs[:n])
+                #gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
         
         # Randomly shuffle GB blocks for data diversity
         random.shuffle(gb_blocks)
