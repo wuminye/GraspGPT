@@ -475,7 +475,7 @@ def main():
    
     
     success_count = 0
-    batch_size = 5000
+    batch_size = 2000
     batch_count = 0
     total_files = len(args_list)
     
@@ -496,7 +496,13 @@ def main():
             print(f"Using {num_processes} processes for parallel processing")
             
             with Pool(processes=num_processes) as pool:
-                results = pool.map(process_single_obj, current_batch_args)
+                try:
+                    results = pool.map_async(process_single_obj, current_batch_args).get(timeout=30)
+                except TimeoutError:
+                    print(f"Processing batch timed out after 30 seconds, terminating processes...")
+                    pool.terminate()
+                    pool.join()
+                    results = []
                 
                 for obj_path, data_list in results:
                     if data_list is not None:
