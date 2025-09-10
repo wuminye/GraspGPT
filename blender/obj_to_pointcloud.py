@@ -497,9 +497,9 @@ def main():
             
             with Pool(processes=num_processes) as pool:
                 try:
-                    results = pool.map_async(process_single_obj, current_batch_args).get(timeout=30)
+                    results = pool.map_async(process_single_obj, current_batch_args).get(timeout=80)
                 except TimeoutError:
-                    print(f"Processing batch timed out after 30 seconds, terminating processes...")
+                    print(f"Processing batch timed out after 80 seconds, terminating processes...")
                     pool.terminate()
                     pool.join()
                     results = []
