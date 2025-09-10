@@ -475,7 +475,7 @@ def main():
    
     
     success_count = 0
-    batch_size = 2000
+    batch_size = 1000
     batch_count = 0
     total_files = len(args_list)
     
