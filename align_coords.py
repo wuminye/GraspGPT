@@ -9,6 +9,16 @@ import open3d as o3d
 import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import torch
+from typing import List, Tuple
+import random
+
+# Import GraspGPT modules
+try:
+    from graspGPT.model.token_manager import get_token_manager
+    from graspGPT.model.parser_and_serializer import Serializer, Seq, SB, CB
+except ImportError:
+    print("Warning: Could not import GraspGPT modules. Sequence conversion will be skipped.")
 
 def read_ply_ground(filepath):
     """Read ground PLY file and calculate normal vector"""
@@ -259,20 +269,61 @@ def compute_global_bbox_after_transform_loaded(loaded_pcds, rotation_matrix, tra
     
     return global_min, global_max
 
-def voxel_downsample_with_colors(pcd, voxel_size=0.01):
+def filter_points_by_bbox(pcd: o3d.geometry.PointCloud, bbox_min: np.ndarray, bbox_max: np.ndarray) -> o3d.geometry.PointCloud:
+    """Filter point cloud to keep only points within bbox"""
+    points = np.asarray(pcd.points)
+    colors = np.asarray(pcd.colors) if len(pcd.colors) > 0 else None
+    
+    # Find points within bbox
+    mask = ((points[:, 0] >= bbox_min[0]) & (points[:, 0] <= bbox_max[0]) &
+            (points[:, 1] >= bbox_min[1]) & (points[:, 1] <= bbox_max[1]) &
+            (points[:, 2] >= bbox_min[2]) & (points[:, 2] <= bbox_max[2]))
+    
+    if np.sum(mask) / len(mask) < 0.05:
+        print("Warning: 95% or more points are outside the bounding box")
+        exit(1)
+    
+    # Filter points
+    filtered_points = points[mask]
+    
+    # Create new point cloud
+    filtered_pcd = o3d.geometry.PointCloud()
+    filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
+    
+    # Filter colors if they exist
+    if colors is not None:
+        filtered_colors = colors[mask]
+        filtered_pcd.colors = o3d.utility.Vector3dVector(filtered_colors)
+    
+    removed_count = len(points) - len(filtered_points)
+    
+    return filtered_pcd
+
+def voxel_downsample_with_colors(pcd, voxel_size=0.01, bbox_min=None, bbox_max=None):
     """Downsample point cloud using voxel grid with color averaging"""
     if len(pcd.points) == 0:
-        return pcd
+        return pcd, []
     
     # Get points and colors
     points = np.asarray(pcd.points)
     has_colors = len(pcd.colors) > 0
-    assert has_colors or len(pcd.points) > 0, "Point cloud must have points or colors"
-    colors = np.asarray(pcd.colors) * 255.0
+    
+    if has_colors:
+        colors = np.round(np.asarray(pcd.colors) * 255.0) # Convert to 0-255 range
+    else:
+        # Use default gray color if no colors
+        colors = np.full((len(points), 3), 127.0)  # Gray color
+        has_colors = True
 
-
-    # Calculate voxel indices for each point
-    voxel_indices = np.floor(points / voxel_size).astype(int)
+    # Use bbox to determine voxel grid origin if provided
+    if bbox_min is not None:
+        # Calculate voxel indices relative to bbox origin
+        voxel_indices = np.floor((points - bbox_min) / voxel_size).astype(int)
+        grid_origin = bbox_min
+    else:
+        # Calculate voxel indices for each point (original method)
+        voxel_indices = np.floor(points / voxel_size).astype(int)
+        grid_origin = np.zeros(3)
     
     # Create unique voxel dictionary
     voxel_dict = {}
@@ -283,24 +334,26 @@ def voxel_downsample_with_colors(pcd, voxel_size=0.01):
         if voxel_key not in voxel_dict:
             voxel_dict[voxel_key] = {
                 'points': [],
-                'colors': [] if has_colors else None
+                'colors': []
             }
         
         voxel_dict[voxel_key]['points'].append(points[i])
-        if has_colors:
-            voxel_dict[voxel_key]['colors'].append(colors[i])
+        voxel_dict[voxel_key]['colors'].append(colors[i])
     
     # Generate downsampled points and colors
     downsampled_points = []
     downsampled_colors = []
+    voxel_coordinates = []  # Store integer voxel coordinates
     
     for voxel_key, voxel_data in voxel_dict.items():
         # Voxel center position
-        voxel_center = (np.array(voxel_key) + 0.5) * voxel_size
-        downsampled_points.append(voxel_center)
-        
-        # Most frequent color if colors exist
-        if has_colors and voxel_data['colors']:
+        if bbox_min is not None:
+            voxel_center = grid_origin + (np.array(voxel_key) + 0.5) * voxel_size
+        else:
+            voxel_center = (np.array(voxel_key) + 0.5) * voxel_size
+       
+        # Most frequent color
+        if voxel_data['colors']:
             colors = np.array(voxel_data['colors'])
             # Convert to integers and find most frequent color
             int_colors = colors.astype(int)
@@ -308,17 +361,129 @@ def voxel_downsample_with_colors(pcd, voxel_size=0.01):
             most_frequent_color = unique_colors[np.argmax(counts)]
             most_frequent_color = most_frequent_color.astype(np.float32) / 255.0  # Normalize back to [0, 1]
             downsampled_colors.append(most_frequent_color)
+            
+            downsampled_points.append(voxel_center)
+        
+            # Store integer voxel coordinates
+            voxel_coordinates.append(voxel_key)
 
     # Create new point cloud
     downsampled_pcd = o3d.geometry.PointCloud()
     downsampled_pcd.points = o3d.utility.Vector3dVector(np.array(downsampled_points))
     
-    if has_colors and downsampled_colors:
+    if downsampled_colors:
         downsampled_pcd.colors = o3d.utility.Vector3dVector(np.array(downsampled_colors))
     
-    return downsampled_pcd
+    return downsampled_pcd, voxel_coordinates
 
-def transform_and_save_pointcloud(pcd_data, output_path, rotation_matrix, translation_vector, voxel_size=0.01):
+def create_voxel_data_list(voxel_coordinates: List[Tuple], colors: np.ndarray) -> List[Tuple]:
+    """Create list of (color_255, coordinates_tensor) tuples from voxel data"""
+    # Create data array for sorting
+    data_list = []
+    for voxel_coord, color in zip(voxel_coordinates, colors):
+        # Convert color from [0,1] to [0,255] range
+        color_255 = np.round(color * 255.0).astype(int)
+        data_list.append({
+            'coord': voxel_coord,
+            'color_255': color_255[0]
+        })
+    
+    # Group by color
+    color_groups = {}
+    for data in data_list:
+        color_255 = data['color_255']
+        coord = data['coord']
+        
+        if color_255 not in color_groups:
+            color_groups[color_255] = []
+        color_groups[color_255].append(coord)
+
+    # Sort coordinates within each color group and create result list
+    result_list = []
+    for color_255 in sorted(color_groups.keys()):
+        coords = color_groups[color_255]
+        # Sort coordinates by (x, y, z)
+        coords.sort(key=lambda x: (x[0], x[1], x[2]))
+        # Convert to tensor
+        coord_tensor = torch.tensor(coords, dtype=torch.uint8)
+        result_list.append((color_255, coord_tensor))
+    
+    return result_list
+
+def convert_data_list_to_sequence(data_list: List[Tuple], volume_dims: Tuple[int, int, int] = (80, 54, 34)) -> List[int]:
+    """
+    Convert data_list to token sequence using the same logic as precomputed_dataset.py
+    
+    Args:
+        data_list: List of (color_255, coordinates_tensor) tuples
+        volume_dims: Volume dimensions for token mapping
+        
+    Returns:
+        List[int]: List of token IDs representing the sequence
+    """
+    try:
+        # Setup token manager and tokenizer
+        token_manager = get_token_manager()
+        token_mapping = token_manager.generate_mapping(volume_dims[0], volume_dims[1], volume_dims[2])
+        
+        # Step 1: Collect all SBs from the data_list
+        sbs = []
+        
+        # Randomly shuffle the data_list order
+        data_list_copy = data_list.copy()
+        random.shuffle(data_list_copy)
+        
+        for color, coordinates in data_list_copy:
+            # Map color to shape tag - use object tags based on color value
+            if 0 <= color <= 87:
+                shape_tag = f'object{color:02d}'  # object00 to object87
+            else:
+                shape_tag = 'unknow'  # fallback for out-of-range colors
+            
+            # Create coordinate blocks (CB) from coordinates
+            cbs = []
+            coords_list = coordinates.tolist()
+            
+            for coord in coords_list:
+                x, y, z = coord
+                # Ensure coordinates are integers and within bounds
+                x, y, z = int(x), int(y), int(z)
+                coord_tuple = (x, y, z)
+                
+                # Create CB with coordinate
+                cb = CB(coord=coord_tuple)
+                cbs.append(cb)
+            
+            # Create SB (Segment Block) with the shape tag and coordinate blocks
+            sb = SB(tag=shape_tag, cbs=cbs)
+            sbs.append(sb)
+        
+        # Step 2: Create sequence with all SBs from this sample
+        seq = Seq(items=sbs)
+        
+        # Step 3: Serialize AST to flat token list
+        flat_tokens = Serializer.serialize(seq)
+        
+        # Step 4: Convert flat tokens to token IDs using token_manager mapping
+        token_ids = []
+        
+        for token in flat_tokens:
+            if token in token_mapping:
+                token_ids.append(token_mapping[token])
+            else:
+                # Handle unknown tokens - could add to mapping or use special token
+                print(f"Warning: Unknown token '{token}' not in mapping")
+                # For robustness, you might want to add a special <UNK> token
+                # For now, we'll skip unknown tokens
+                continue
+        
+        return token_ids, seq
+        
+    except Exception as e:
+        print(f"Warning: Could not convert data_list to sequence: {e}")
+        return []
+
+def transform_and_save_pointcloud(pcd_data, output_path, rotation_matrix, translation_vector, voxel_size=0.01, bbox_min=None, bbox_max=None):
     """Apply translation and rotation transform to loaded point cloud, downsample, and save"""
     # Create a copy to avoid modifying original
     pcd = o3d.geometry.PointCloud(pcd_data['pcd'])
@@ -329,8 +494,12 @@ def transform_and_save_pointcloud(pcd_data, output_path, rotation_matrix, transl
     # Apply translation transform
     pcd.translate(translation_vector)
     
-    # Apply voxel downsampling with color averaging
-    downsampled_pcd = voxel_downsample_with_colors(pcd, voxel_size)
+    # Check if points are within bbox before voxelization
+    if bbox_min is not None and bbox_max is not None:
+        pcd = filter_points_by_bbox(pcd, bbox_min, bbox_max)
+    
+    # Apply voxel downsampling with bbox
+    downsampled_pcd, voxel_coordinates = voxel_downsample_with_colors(pcd, voxel_size, bbox_min, bbox_max)
     
     print(f"Downsampled from {len(pcd.points)} to {len(downsampled_pcd.points)} points")
     
@@ -338,10 +507,52 @@ def transform_and_save_pointcloud(pcd_data, output_path, rotation_matrix, transl
     success = o3d.io.write_point_cloud(output_path, downsampled_pcd)
     if success:
         print(f"Saved transformed point cloud: {output_path}")
-        return True
     else:
         print(f"Failed to save: {output_path}")
         return False
+
+    # Create data list from voxel data
+    colors = np.asarray(downsampled_pcd.colors) if len(downsampled_pcd.colors) > 0 else np.full((len(voxel_coordinates), 3), 0.5)
+    data_list = create_voxel_data_list(voxel_coordinates, colors)
+    if len(data_list) == 0:
+        print(f"Warning: No voxel data generated !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    print(f"Created data list with {len(data_list)} color groups {output_path}")
+
+    # Convert data_list to sequence using precomputed_dataset logic
+    if bbox_min is not None and bbox_max is not None:
+        # Calculate volume dimensions from bbox
+        volume_size = bbox_max - bbox_min
+        voxel_dims = np.ceil(volume_size / voxel_size).astype(int)
+        volume_dims = (int(voxel_dims[0]), int(voxel_dims[1]), int(voxel_dims[2]))
+        
+        token_sequence, seq = convert_data_list_to_sequence(data_list, volume_dims)
+        if len(token_sequence) > 0:
+            print(f"Converted to token sequence with {len(token_sequence)} tokens, {volume_dims}")
+            
+            # Save seq as PTH file
+            output_path_obj = Path(output_path)
+            seq_output_path = output_path_obj.parent / f"{output_path_obj.stem}_seq.pth"
+            
+            # Create data structure to save
+            seq_data = {
+                'seq': seq,
+                'token_sequence': token_sequence,
+                'data_list': data_list,
+                'volume_dims': volume_dims,
+                'voxel_size': voxel_size,
+                'bbox_min': bbox_min,
+                'bbox_max': bbox_max,
+                'scene_name': output_path_obj.stem
+            }
+            
+            torch.save(seq_data, str(seq_output_path))
+            print(f"Saved sequence data to: {seq_output_path}")
+        else:
+            print("Warning: Failed to convert data_list to token sequence")
+    else:
+        print("Warning: bbox_min or bbox_max not provided, skipping sequence conversion")
+
+    return True
 
 def save_transformation_xml(rotation_matrix, translation_vector, min_bound, max_bound, voxel_size, output_path):
     """Save transformation matrices, bounding box, and voxel resolution to XML file"""
@@ -569,14 +780,31 @@ def main():
         print(f"  Min: {final_min_bound}")
         print(f"  Max: {final_max_bound}")
         
+        # Validate that final bounds are within the predefined bbox limits
+        BBOX_MIN = np.array([-0.3, -0.2, 0])    # bbox minimum coordinates (Z-up)
+        BBOX_MAX = np.array([0.3, 0.2, 0.25])     # bbox maximum coordinates (Z-up)
+        
+        if not np.all(final_min_bound >= BBOX_MIN):
+            print(f"ERROR: final_min_bound {final_min_bound} exceeds BBOX_MIN {BBOX_MIN}")
+            print("Point cloud bounds are outside the allowed range!")
+            return
+        
+        if not np.all(final_max_bound <= BBOX_MAX):
+            print(f"ERROR: final_max_bound {final_max_bound} exceeds BBOX_MAX {BBOX_MAX}")
+            print("Point cloud bounds are outside the allowed range!")
+            return
+        
+        print("✓ Final bounds are within the allowed bbox range")
+        
     except Exception as e:
         print(f"Failed to compute bounding box: {e}")
         return
     
+
     # Save transformation data to XML (with final bbox)
-    voxel_size = 0.01  # 1cm resolution
+    voxel_size = 0.0075  # 1cm resolution
     xml_output_path = Path(output_dir) / "transformation.xml"
-    save_transformation_xml(rotation_matrix, total_translation, final_min_bound, final_max_bound, voxel_size, str(xml_output_path))
+    save_transformation_xml(rotation_matrix, total_translation, BBOX_MIN, BBOX_MAX, voxel_size, str(xml_output_path))
     
     print("\nStep 5: Applying coordinate transform and translation to all point cloud files...")
     success_count = 0
@@ -587,7 +815,7 @@ def main():
         output_path = input_file.parent / output_filename
         
         print(f"\nProcessing: {input_file.name}")
-        if transform_and_save_pointcloud(pcd_data, str(output_path), rotation_matrix, total_translation, voxel_size):
+        if transform_and_save_pointcloud(pcd_data, str(output_path), rotation_matrix, total_translation, voxel_size, BBOX_MIN, BBOX_MAX):
             success_count += 1
     
     print(f"\nComplete! Successfully processed {success_count}/{len(loaded_pcds)} files")

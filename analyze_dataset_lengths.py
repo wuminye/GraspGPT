@@ -175,7 +175,7 @@ def main():
     try:
         dataset = PrecomputedDataset(
             data_path=data_path,
-            max_sequence_length=4096
+            max_sequence_length=8192
         )
         
         print(f"Dataset size: {len(dataset)} samples")
@@ -227,8 +227,8 @@ def main():
     
     # Distribution across different length intervals
     print(f"\n=== Length Interval Distribution ===")
-    bins = [0, 100, 500, 1000, 1500, 2000, 3000, max_seq_len, np.inf]
-    labels = ['<100', '100-500', '500-1000', '1000-1500', '1500-2000', '2000-3000', f'3000-{max_seq_len}', f'>{max_seq_len}']
+    bins = [0, 100, 500, 1000, 1500, 2000, 3000, 5000,  max_seq_len, np.inf]
+    labels = ['<100', '100-500', '500-1000', '1000-1500', '1500-2000', '2000-3000', '3000-5000', f'5000-{max_seq_len}', f'>{max_seq_len}']
     
     hist, _ = np.histogram(lengths, bins=bins)
     for i, (label, count) in enumerate(zip(labels, hist)):

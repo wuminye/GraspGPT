@@ -63,6 +63,9 @@ def main():
     # 初始化 API
     g = GraspNet(args.root, camera=args.camera, split="custom", sceneIds=[args.scene_id])  # split 对 loadSceneModel/PointCloud 影响不大
 
+
+   
+
     scene_id = args.scene_id
     ann_id = args.ann_id
 
@@ -96,6 +99,46 @@ def main():
     scene_out_path = os.path.join(args.outdir, f"scene_{scene_id:04d}_scene.ply")
     o3d.io.write_point_cloud(scene_out_path, scene_pcd, write_ascii=False, compressed=False, print_progress=True)
     print(f"[保存完成] 场景点云：{scene_out_path}")
+
+    _6d_grasp = g.loadGrasp(sceneId = scene_id, annId = ann_id, format = '6d', camera = 'kinect', fric_coef_thresh = 0.2)
+
+    points_grasp = _6d_grasp.random_sample(numGrasp = 20).to_open3d_geometry_list()  # 采样20个抓取，转换为open3d格式点云
+
+    # 3) 合并抓取点云和场景点云
+    # 创建一个新的点云来存储合并结果
+    merged_scene_grasp = o3d.geometry.PointCloud()
+    
+    # 添加场景点云的点和颜色
+    merged_scene_grasp.points = o3d.utility.Vector3dVector(np.asarray(scene_pcd.points))
+    if len(scene_pcd.colors) > 0:
+        merged_scene_grasp.colors = o3d.utility.Vector3dVector(np.asarray(scene_pcd.colors))
+    else:
+        # 如果场景点云没有颜色，设置为白色
+        scene_colors = np.ones((len(scene_pcd.points), 3))
+        merged_scene_grasp.colors = o3d.utility.Vector3dVector(scene_colors)
+    
+    # 合并所有抓取几何体（转换为点云）并设置为红色
+    all_grasp_points = []
+    for grasp_mesh in points_grasp:
+        # 将三角网格转换为点云（采样表面点）
+        if hasattr(grasp_mesh, 'vertices') and len(grasp_mesh.vertices) > 0:
+            grasp_pcd = grasp_mesh.sample_points_uniformly(number_of_points=100)
+            all_grasp_points.append(np.asarray(grasp_pcd.points))
+    
+    if len(all_grasp_points) > 0:
+        grasp_points_combined = np.vstack(all_grasp_points)
+        grasp_colors = np.array([[1.0, 0.0, 0.0]] * len(grasp_points_combined))  # 红色
+        
+        # 4) 单独保存抓取几何体点云
+        grasp_only_pcd = o3d.geometry.PointCloud()
+        grasp_only_pcd.points = o3d.utility.Vector3dVector(grasp_points_combined)
+        grasp_only_pcd.colors = o3d.utility.Vector3dVector(grasp_colors)
+        
+        grasp_out_path = os.path.join(args.outdir, f"scene_{scene_id:04d}_grasps_only.ply")
+        o3d.io.write_point_cloud(grasp_out_path, grasp_only_pcd, write_ascii=False, compressed=False, print_progress=True)
+        print(f"[保存完成] 抓取几何体点云：{grasp_out_path}")
+        
+
 
     print("\nDone.")
 
