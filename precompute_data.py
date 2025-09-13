@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 import random
+import argparse
 from multiprocessing import Pool, Queue, Manager
 from functools import partial
 
@@ -49,15 +50,17 @@ def process_single_ind(ind):
     
     results = []
     for j in range(Repeat_times):
-        voxel_data, scene_grasps = global_dataset.prepare_data(ind)
+        voxel_data, scene_grasps, valid_grasp_parampc = global_dataset.prepare_data(ind)
         
         # 转换为uint8
         voxel_data_uint8 = convert_to_uint8(voxel_data)
         scene_grasps_uint8 = convert_to_uint8(scene_grasps)
-        
+        valid_grasp_parampc_uint8 = convert_to_uint8(valid_grasp_parampc)
+
         results.append({
             'voxel_data': voxel_data_uint8,
             'scene_grasps': scene_grasps_uint8,
+            'valid_grasp_parampc': valid_grasp_parampc_uint8,
             'ind': ind,
             'repeat': j,
             'volume_dims': global_dataset.volume_dims,
@@ -70,6 +73,14 @@ def process_single_ind(ind):
 
 
 def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='预计算数据集')
+    parser.add_argument('--multiprocess', action='store_true', default=False, 
+                        help='启用多进程处理 (默认关闭)')
+    parser.add_argument('--num-processes', type=int, default=None,
+                        help='指定进程数量 (默认为CPU核心数)')
+    args = parser.parse_args()
+    
     # 设置数据路径 - 可以是单个文件或目录
     data_path = "output/pointclouds/"  # 使用包含多个batch文件的目录
     # data_path = "output/pointclouds/voxel_data_batch_0.pth"  # 或者单个文件
@@ -79,7 +90,7 @@ def main():
     # 数据集参数
     max_sequence_length = 3512
     grasp_data_path = 'data'
-    max_grasps_per_object = -1
+    max_grasps_per_object = 5
     
     try:
         # 创建数据集（只创建一次）
@@ -116,17 +127,42 @@ def main():
     # 生成随机数用于文件名
     random_id = random.randint(10000, 99999)
     
-    # 使用多进程处理
-    num_processes = min(os.cpu_count(), len(dataset))
-    print(f"使用 {num_processes} 个进程并行处理")
-    
-    # 创建初始化函数，传递数据集
-    init_func = partial(init_worker, dataset)
-    
-    with Pool(processes=num_processes, initializer=init_func) as pool:
-        # 使用imap显示进度条
-        for ind_results in tqdm(pool.imap(process_single_ind, range(len(dataset))), 
-                               total=len(dataset), desc="多进程处理数据集"):
+    # 根据参数决定是否使用多进程
+    if args.multiprocess:
+        # 使用多进程处理
+        if args.num_processes is not None:
+            num_processes = args.num_processes
+        else:
+            num_processes = min(os.cpu_count(), len(dataset))
+        print(f"使用 {num_processes} 个进程并行处理")
+        
+        # 创建初始化函数，传递数据集
+        init_func = partial(init_worker, dataset)
+        
+        with Pool(processes=num_processes, initializer=init_func) as pool:
+            # 使用imap显示进度条
+            for ind_results in tqdm(pool.imap(process_single_ind, range(len(dataset))), 
+                                   total=len(dataset), desc="多进程处理数据集"):
+                
+                # 将结果添加到总列表
+                all_results.extend(ind_results)
+                
+                # 每3000次保存一个文件
+                if len(all_results) >= batch_size:
+                    output_path = output_dir / f"precomputed_batch_{random_id}_{batch_count}.pth"
+                    torch.save(all_results, output_path)
+                    print(f"已保存批次 {batch_count}: {output_path} (包含 {len(all_results)} 个样本)")
+                    total_saved += len(all_results)
+                    all_results = []  # 清空列表
+                    batch_count += 1
+    else:
+        # 使用单进程处理
+        print("使用单进程处理")
+        global global_dataset
+        global_dataset = dataset  # 设置全局数据集
+        
+        for ind in tqdm(range(len(dataset)), desc="单进程处理数据集"):
+            ind_results = process_single_ind(ind)
             
             # 将结果添加到总列表
             all_results.extend(ind_results)
@@ -151,4 +187,8 @@ def main():
 
 if __name__ == "__main__":
     print("Repeat_times =", Repeat_times)
+    print("使用方法:")
+    print("  单进程模式: python precompute_data.py")
+    print("  多进程模式: python precompute_data.py --multiprocess")
+    print("  指定进程数: python precompute_data.py --multiprocess --num-processes 4")
     main()

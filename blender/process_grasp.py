@@ -108,6 +108,7 @@ def plot_gripper_pro_max(center, R, width, depth, score=1, color=None):
 
     - open3d.geometry.TriangleMesh
     '''
+
     x, y, z = center
     height=0.004
     finger_width = 0.004
@@ -150,6 +151,7 @@ def plot_gripper_pro_max(center, R, width, depth, score=1, color=None):
     tail_points[:,1] -= finger_width / 2
     tail_points[:,2] -= height/2
 
+
     vertices = np.concatenate([left_points, right_points, bottom_points, tail_points], axis=0)
     vertices = np.dot(R, vertices.T).T + center
     triangles = np.concatenate([left_triangles, right_triangles, bottom_triangles, tail_triangles], axis=0)
@@ -160,6 +162,117 @@ def plot_gripper_pro_max(center, R, width, depth, score=1, color=None):
     gripper.triangles = o3d.utility.Vector3iVector(triangles)
     gripper.vertex_colors = o3d.utility.Vector3dVector(colors)
     return gripper
+
+
+def gripper_params_to_interior_points(center, R, width, depth):
+    '''
+    Convert gripper parameters to three interior points.
+    
+    **Input:**
+    - center: numpy array of (3,), target point as gripper center
+    - R: numpy array of (3,3), rotation matrix of gripper
+    - width: float, gripper width
+    - depth: float, gripper depth
+    
+    **Output:**
+    - tuple of three points: (left_interior, right_interior, bottom_center)
+    '''
+    finger_width = 0.004
+    depth_base = 0.02
+    height=0.004
+
+    arm_bbox_center = np.array([ depth+depth_base+finger_width, finger_width, height]) / 2
+    bottom_bbox_center = np.array([ finger_width, width, height]) / 2
+    
+    # Points guaranteed to be inside the gripper geometry
+    left_interior = center + R @ (np.array([ -(depth_base+finger_width), -(width/2 + finger_width), -height/2])+arm_bbox_center)
+    right_interior = center + R @ (np.array([-(depth_base+finger_width), width/2, -height/2])+arm_bbox_center)
+    bottom_center = center + R @ (np.array([-(finger_width + depth_base), -width/2, -height/2])+bottom_bbox_center)
+
+    return left_interior, right_interior, bottom_center
+
+
+def interior_points_to_gripper_params(left_interior, right_interior, bottom_center):
+    '''
+    Convert three interior points back to gripper parameters.
+    This function reverses the gripper_params_to_interior_points transformation.
+    
+    **Input:**
+    - left_interior: numpy array of (3,), left finger interior point
+    - right_interior: numpy array of (3,), right finger interior point  
+    - bottom_center: numpy array of (3,), bottom center point
+    
+    **Output:**
+    - tuple: (center, R, width, depth)
+    '''
+    finger_width = 0.004
+    depth_base = 0.02
+    height = 0.004
+    
+    # First, establish coordinate system from the three points
+    # Vector from left to right finger (should align with gripper Y-axis)
+    left_to_right = right_interior - left_interior
+    y_axis = left_to_right / np.linalg.norm(left_to_right)
+    
+    # Center of the two finger points
+    fingers_center = (left_interior + right_interior) / 2
+    
+    # Vector from bottom to fingers center (should align with gripper X-axis)  
+    bottom_to_fingers = fingers_center - bottom_center
+    x_axis = bottom_to_fingers / np.linalg.norm(bottom_to_fingers)
+    
+    # Z-axis from cross product
+    z_axis = np.cross(x_axis, y_axis)
+    z_axis = z_axis / np.linalg.norm(z_axis)
+    
+    # Recompute x_axis to ensure orthogonality
+    x_axis = np.cross(y_axis, z_axis)
+    
+    R = np.column_stack([x_axis, y_axis, z_axis])
+    
+    # Transform points to local gripper coordinates
+    # We'll use left_interior and bottom_center to solve for width and depth
+    
+    # From gripper_params_to_interior_points, we know:
+    # left_interior = center + R @ (offset_left + arm_bbox_center)
+    # bottom_center = center + R @ (offset_bottom + bottom_bbox_center)
+    # where:
+    # offset_left = [-(depth_base+finger_width), -(width/2 + finger_width), -height/2]
+    # offset_bottom = [-(finger_width + depth_base), -width/2, -height/2]
+    
+    # Transform the relative vector from bottom to left finger to local coordinates
+    bottom_to_left = left_interior - bottom_center
+    local_bottom_to_left = R.T @ bottom_to_left
+    
+    # In local coordinates, this should be:
+    # [-(depth_base+finger_width), -(width/2 + finger_width), -height/2] + arm_bbox_center
+    # - ([-(finger_width + depth_base), -width/2, -height/2] + bottom_bbox_center)
+    
+    # Solve for width from the Y-component difference
+    # local_bottom_to_left[1] = (-(width/2 + finger_width) + finger_width/2) - (-width/2 + width/2)
+    # = -width/2 - finger_width + finger_width/2 - 0
+    # = -width/2 - finger_width/2
+    width = -2 * (local_bottom_to_left[1] + finger_width/2)
+    
+    # Solve for depth from the X-component difference  
+    # We need to account for bbox centers
+    # arm_bbox_center[0] = (depth + depth_base + finger_width) / 2
+    # bottom_bbox_center[0] = finger_width / 2
+    # local_bottom_to_left[0] = (-(depth_base+finger_width) + (depth+depth_base+finger_width)/2) - (-(finger_width+depth_base) + finger_width/2)
+    # = -(depth_base+finger_width) + (depth+depth_base+finger_width)/2 + finger_width + depth_base - finger_width/2
+    # = -(depth_base+finger_width) + (depth+depth_base+finger_width)/2 + finger_width + depth_base - finger_width/2
+    # = (depth+depth_base+finger_width)/2 - finger_width/2
+    # = (depth + depth_base)/2
+    depth = 2 * local_bottom_to_left[0] - depth_base
+    
+    # Calculate center using the fact that:
+    # left_interior = center + R @ (offset_left + arm_bbox_center)
+    arm_bbox_center = np.array([depth + depth_base + finger_width, finger_width, height]) / 2
+    offset_left = np.array([-(depth_base+finger_width), -(width/2 + finger_width), -height/2])
+    local_left = offset_left + arm_bbox_center
+    center = left_interior - R @ local_left
+    
+    return center, R, width, depth
 
 class Grasp():
     def __init__(self, *args):
@@ -323,6 +436,12 @@ class Grasp():
         - int of the object_id.
         '''
         self.grasp_array[16] = object_id
+
+    def to_parampc(self):
+        left_interior, right_interior, bottom_center = gripper_params_to_interior_points(self.translation, self.rotation_matrix, self.width, self.depth)
+        return np.stack([left_interior, right_interior, bottom_center])
+
+
 
     def transform(self, T):
         '''
@@ -614,9 +733,11 @@ class GraspGroup():
         - list of open3d.geometry.Geometry of the grippers.
         '''
         geometry = []
+
         for i in range(len(self.grasp_group_array)):
             g = Grasp(self.grasp_group_array[i])
-            geometry.append(g.to_open3d_geometry())
+            geo = g.to_open3d_geometry()
+            geometry.append(geo)
         return geometry
     
     def sort_by_score(self, reverse = False):
@@ -653,6 +774,18 @@ class GraspGroup():
         shuffled_grasp_group = GraspGroup()
         shuffled_grasp_group.grasp_group_array = copy.deepcopy(shuffled_grasp_group_array[:numGrasp])
         return shuffled_grasp_group
+
+    def to_parampc_list(self):
+
+
+        parampcs = []
+
+        for i in range(len(self.grasp_group_array)):
+            g = Grasp(self.grasp_group_array[i])
+            parampcs.append(g.to_parampc())
+        
+        return np.stack(parampcs)  # (N, 3, 3)
+       
 
 def loadGraspLabels(objIds=None, root = '../data' ):
     # load object-level grasp labels of the given obj ids

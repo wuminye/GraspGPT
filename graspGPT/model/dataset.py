@@ -15,7 +15,7 @@ import sys
 
 # Add path to parent directories for imports
 sys.path.append(str(Path(__file__).parent.parent.parent / "blender"))
-from process_grasp import loadGraspLabels, process_grasp_data
+from process_grasp import loadGraspLabels, process_grasp_data, gripper_params_to_interior_points, interior_points_to_gripper_params
 
 try:
     from .token_manager import get_token_manager
@@ -220,14 +220,13 @@ class VoxelDataset(Dataset):
                     scene_transforms[obj_id] = full_transforms[obj_id]
 
         scene_grasps = None
-        # 提取并变换grasp信息
-        scene_grasps = self._extract_object_grasps(scene_transforms)
+        scene_grasps, scene_grasp_parampc = self._extract_object_grasps(scene_transforms)
         
         
         # 过滤与场景occupancy碰撞的grasps
-        scene_grasps = self._filter_colliding_grasps(scene_grasps, voxel_data, self.max_grasps_per_object)
+        scene_grasps, scene_grasp_parampc = self._filter_colliding_grasps(scene_grasps, scene_grasp_parampc, voxel_data, self.max_grasps_per_object)
 
-        return voxel_data, scene_grasps
+        return voxel_data, scene_grasps, scene_grasp_parampc
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
@@ -241,6 +240,7 @@ class VoxelDataset(Dataset):
                 - tokens: torch.Tensor of token sequence
                 - max_sequence_length: int, maximum sequence length
                 - scene_grasps: Dict mapping object_id to transformed grasp arrays
+                - scene_grasp_parampc: Dict mapping object_id to transformed grasp parameters
         """
         # Get the raw voxel data for this sample
         voxel_data = self.data[idx]
@@ -261,12 +261,13 @@ class VoxelDataset(Dataset):
                     scene_transforms[obj_id] = full_transforms[obj_id]
 
         scene_grasps = None
+        scene_grasp_parampc = None
         # 提取并变换grasp信息
-        scene_grasps = self._extract_object_grasps(scene_transforms)
+        scene_grasps, scene_grasp_parampc = self._extract_object_grasps(scene_transforms)
         
         
         # 过滤与场景occupancy碰撞的grasps
-        scene_grasps = self._filter_colliding_grasps(scene_grasps, voxel_data, self.max_grasps_per_object)
+        scene_grasps, scene_grasp_parampc = self._filter_colliding_grasps(scene_grasps, scene_grasp_parampc, voxel_data, self.max_grasps_per_object)
 
 
         
@@ -563,6 +564,7 @@ class VoxelDataset(Dataset):
             Dictionary mapping object_id to transformed grasp arrays
         """
         scene_grasps = {}
+        scene_grasp_parampc = {}
 
 
         
@@ -578,8 +580,13 @@ class VoxelDataset(Dataset):
                 grasp_group = process_grasp_data({obj_id: grasp_data}, obj_id, 
                                                fric_coef_thresh=0.4, grasp_height=0.02)
 
-                grasp_group = grasp_group.random_sample(numGrasp = 10000).to_open3d_geometry_list()  
                 
+                sample_group = grasp_group.random_sample(numGrasp = 100)
+                grasp_parampc = sample_group.to_parampc_list()  # (num_grasps, 3, 3)
+
+                grasp_group = sample_group.to_open3d_geometry_list()  
+                
+
 
 
                 if len(grasp_group) == 0:
@@ -594,7 +601,20 @@ class VoxelDataset(Dataset):
                 coord_correction = self.get_coordinate_transform()
                 final_transform = np.dot(coord_correction, transform_matrix)
                 
-
+                # Transform grasp_parampc to scene coordinates using vectorized operations
+                # grasp_parampc shape: (num_grasps, 3, 3)
+                # Reshape to (num_grasps * 3, 3) for batch processing
+                original_shape = grasp_parampc.shape  # (num_grasps, 3, 3)
+                points_reshaped = grasp_parampc.reshape(-1, 3)  # (num_grasps * 3, 3)
+                
+                # Convert to homogeneous coordinates: add ones column
+                homogeneous_points = np.hstack([points_reshaped, np.ones((points_reshaped.shape[0], 1))])  # (num_grasps * 3, 4)
+                
+                # Apply transformation in batch
+                transformed_points = (final_transform @ homogeneous_points.T).T  # (num_grasps * 3, 4)
+                
+                # Extract xyz and reshape back to original shape
+                grasp_parampc = transformed_points[:, :3].reshape(original_shape)  # (num_grasps, 3, 3)
           
                 
                 all_grasp_points = []
@@ -610,14 +630,15 @@ class VoxelDataset(Dataset):
                 
                 # Store transformed grasps
                 scene_grasps[obj_id] = all_grasp_points
+                scene_grasp_parampc[obj_id] = grasp_parampc  # (num_grasps, 3, 3)
                 
             except Exception as e:
                 print(f"Warning: Failed to process grasps for object {obj_id}: {e}")
                 continue
                 
-        return scene_grasps
-    
-    def _filter_colliding_grasps(self, scene_grasps: Dict[int, np.ndarray], voxel_data: List[Tuple], max_grasps_per_object: Optional[int] = None) -> Dict[int, np.ndarray]:
+        return scene_grasps, scene_grasp_parampc
+
+    def _filter_colliding_grasps(self, scene_grasps: Dict[int, np.ndarray], scene_grasp_parampc: Dict[int, np.ndarray], voxel_data: List[Tuple], max_grasps_per_object: Optional[int] = None) -> Dict[int, np.ndarray]:
         """
         Filter out grasps that collide with scene occupancy
         
@@ -630,7 +651,7 @@ class VoxelDataset(Dataset):
             Filtered scene_grasps with colliding grasps removed and optionally randomly sampled
         """
         if not scene_grasps or self.bbox_min is None or self.bbox_max is None:
-            return scene_grasps
+            return scene_grasps, scene_grasp_parampc
             
         # Convert scene occupancy to a set of voxel coordinates for fast lookup
         scene_occupancy = set()
@@ -661,6 +682,7 @@ class VoxelDataset(Dataset):
         volume_dims = np.array(self.volume_dims)
         
         filtered_grasps = {}
+        filtered_grasp_parampc = {}
         total_original_grasps = 0
         total_filtered_grasps = 0
         
@@ -669,7 +691,18 @@ class VoxelDataset(Dataset):
             total_original_grasps += original_count
             # grasp_points shape: [num_grasps, 100, 3]
             valid_grasps = []
-            
+            valid_grasp_parampc = []
+
+
+            # Convert grasp parameters to discrete coordinates based on bbox
+            param_pc = scene_grasp_parampc[obj_id]  # shape: (num_grasps, 3, 3)
+            # Convert 3D world coordinates to voxel indices for parameters
+            # Reshape bbox for broadcasting: (3,) -> (1, 1, 3)
+            bbox_min_reshaped = bbox_min.reshape(1, 1, 3)
+            bbox_max_reshaped = bbox_max.reshape(1, 1, 3)
+            normalized_param_coords = (param_pc - bbox_min_reshaped) / (bbox_max_reshaped - bbox_min_reshaped)
+            voxel_param_pc = (normalized_param_coords * (volume_dims - 1)).astype(int)
+
             for i, grasp in enumerate(grasp_points):
                 # grasp shape: [100, 3] - 100 points representing one grasp
                 
@@ -698,6 +731,8 @@ class VoxelDataset(Dataset):
                     # No collision found, keep the deduplicated voxel coordinates
                     deduplicated_coords = np.array(list(grasp_coords_set))
                     valid_grasps.append(deduplicated_coords)
+                    valid_grasp_parampc.append(voxel_param_pc[i])
+
 
             if valid_grasps:
                 # Apply random sampling if max_grasps_per_object is specified
@@ -705,8 +740,10 @@ class VoxelDataset(Dataset):
                     # Randomly sample max_grasps_per_object grasps
                     sampled_indices = random.sample(range(len(valid_grasps)), max_grasps_per_object)
                     valid_grasps = [valid_grasps[i] for i in sampled_indices]
+                    valid_grasp_parampc = [valid_grasp_parampc[i] for i in sampled_indices]
                 
                 filtered_grasps[obj_id] = valid_grasps # 保持为list格式
+                filtered_grasp_parampc[obj_id] = valid_grasp_parampc # 保持为list格式
                 valid_count = len(valid_grasps)
                 total_filtered_grasps += valid_count
                 
@@ -725,7 +762,7 @@ class VoxelDataset(Dataset):
         else:
             print("No grasps to filter")
 
-        return filtered_grasps
+        return filtered_grasps, filtered_grasp_parampc
     
     def _save_grasp_coordinates_ply(self, scene_grasps: Dict[int, List], save_path: str = None):
         """
