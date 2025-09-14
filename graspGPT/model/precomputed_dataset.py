@@ -177,12 +177,12 @@ class PrecomputedDataset(Dataset):
         # Extract precomputed data
         voxel_data = sample['voxel_data']
         scene_grasps = sample['scene_grasps']
+        valid_grasp_parampc = sample['valid_grasp_parampc']
+       
 
-        
-        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps)
 
-        
-        
+        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps, valid_grasp_parampc)
+
         # 处理token序列（保持原有逻辑）
         token_sequence = self.tokenizer_fn(voxel_data)
         if isinstance(token_sequence, torch.Tensor):
@@ -224,8 +224,8 @@ class PrecomputedDataset(Dataset):
     def get_vocab_size(self) -> int:
         """Get vocabulary size from token_manager"""
         return len(self.token_mapping)
-    
-    def convert_scene_grasps_to_sequence(self, scene_grasps: Dict[int, List]) -> Seq:
+
+    def convert_scene_grasps_to_sequence(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> Seq:
         """
         Convert scene_grasps data to GRASP sequence following grammar definition
         
@@ -239,7 +239,7 @@ class PrecomputedDataset(Dataset):
         Returns:
             Seq: Sequence containing GRASP item following the grammar
         """
-        if not scene_grasps:
+        if not scene_grasps or not valid_grasp_parampc:
             # Return empty GRASP sequence
             empty_grasp = GRASP(gbs=[])
             return Seq(items=[empty_grasp])
@@ -247,7 +247,7 @@ class PrecomputedDataset(Dataset):
         # Create GB blocks for each object with grasps
         gb_blocks = []
         
-        for obj_id, grasp_list in scene_grasps.items():
+        for obj_id, grasp_list in valid_grasp_parampc.items():  # Use valid_grasp_parampc
             if not grasp_list:
                 continue
                 
@@ -266,6 +266,8 @@ class PrecomputedDataset(Dataset):
                     # Ensure coordinate is a tuple of 3 integers
                     if len(coord) == 3:
                         x, y, z = int(coord[0]), int(coord[1]), int(coord[2])
+                        
+                        # Check bounds against volume dimensions
                         coord_tuple = (x, y, z)
                         cb = CB(coord=coord_tuple)
                         cbs.append(cb)
@@ -280,7 +282,7 @@ class PrecomputedDataset(Dataset):
             if len(local_gbs) > 0:
                 random.shuffle(local_gbs)
                 # Randomly select 1 to 5 elements
-                n = random.randint(2, min(5, len(local_gbs)))
+                n = random.randint(1, min(5, len(local_gbs)))
                 gb_blocks.extend(local_gbs[:n])
                 #gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
         
@@ -291,8 +293,8 @@ class PrecomputedDataset(Dataset):
         
         # Return sequence with the GRASP item
         return Seq(items=[grasp_item])
-    
-    def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List]) -> List[int]:
+
+    def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> List[int]:
         """
         Convert scene_grasps to token IDs using the GRASP grammar
         
@@ -303,7 +305,7 @@ class PrecomputedDataset(Dataset):
             List[int]: List of token IDs representing the GRASP sequence
         """
         # Convert to GRASP sequence
-        grasp_seq = self.convert_scene_grasps_to_sequence(scene_grasps)
+        grasp_seq = self.convert_scene_grasps_to_sequence(scene_grasps, valid_grasp_parampc)
         
         # Serialize to flat tokens
         flat_tokens = Serializer.serialize(grasp_seq)

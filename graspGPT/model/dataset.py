@@ -270,11 +270,9 @@ class VoxelDataset(Dataset):
         scene_grasps, scene_grasp_parampc = self._filter_colliding_grasps(scene_grasps, scene_grasp_parampc, voxel_data, self.max_grasps_per_object)
 
 
-        
-        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps)
 
-        
-        
+        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps, scene_grasp_parampc)
+
         # 处理token序列（保持原有逻辑）
         token_sequence = self.tokenizer_fn(voxel_data)
         if isinstance(token_sequence, torch.Tensor):
@@ -653,28 +651,30 @@ class VoxelDataset(Dataset):
         if not scene_grasps or self.bbox_min is None or self.bbox_max is None:
             return scene_grasps, scene_grasp_parampc
             
-        # Convert scene occupancy to a set of voxel coordinates for fast lookup
-        scene_occupancy = set()
-        for color, coords in voxel_data:
+        # Convert scene occupancy to a dictionary of sets for fast lookup, keyed by obj_id
+        scene_occupancy_by_obj = {}
+        for voxel_obj_id, coords in voxel_data:
+            obj_coords = set()
             if hasattr(coords, 'tolist'):
                 # coords is numpy array
                 coords_list = coords.tolist()
                 if isinstance(coords_list[0], (list, tuple)):
                     # coords is 2D array [[x1,y1,z1], [x2,y2,z2], ...]
-                    scene_occupancy.update(tuple(coord) for coord in coords_list)
+                    obj_coords.update(tuple(coord) for coord in coords_list)
                 else:
                     # coords is 1D array [x, y, z]
-                    scene_occupancy.add(tuple(coords_list))
+                    obj_coords.add(tuple(coords_list))
             elif isinstance(coords, (list, tuple)):
                 if isinstance(coords[0], (list, tuple)):
                     # coords is nested list [[x1,y1,z1], [x2,y2,z2], ...]
-                    scene_occupancy.update(tuple(coord) for coord in coords)
+                    obj_coords.update(tuple(coord) for coord in coords)
                 else:
                     # coords is single coordinate [x, y, z]
-                    scene_occupancy.add(tuple(coords))
+                    obj_coords.add(tuple(coords))
             else:
                 # Single coordinate as tuple or other format
-                scene_occupancy.add(tuple(coords))
+                obj_coords.add(tuple(coords))
+            scene_occupancy_by_obj[voxel_obj_id] = obj_coords
         
         # Convert bbox info to numpy arrays for computation
         bbox_min = np.array(self.bbox_min)
@@ -693,6 +693,11 @@ class VoxelDataset(Dataset):
             valid_grasps = []
             valid_grasp_parampc = []
 
+            # Pre-compute scene occupancy excluding current obj_id
+            scene_occupancy_excluding_current = set()
+            for other_obj_id, other_coords in scene_occupancy_by_obj.items():
+                if other_obj_id != obj_id:
+                    scene_occupancy_excluding_current.update(other_coords)
 
             # Convert grasp parameters to discrete coordinates based on bbox
             param_pc = scene_grasp_parampc[obj_id]  # shape: (num_grasps, 3, 3)
@@ -726,8 +731,8 @@ class VoxelDataset(Dataset):
                 # Convert grasp coordinates to set for efficient intersection
                 grasp_coords_set = {tuple(coord) for coord in voxel_coords}
                 
-                # Check collision using set intersection
-                if not grasp_coords_set.intersection(scene_occupancy):
+                # Check collision using set intersection (excluding current obj_id)
+                if not grasp_coords_set.intersection(scene_occupancy_excluding_current):
                     # No collision found, keep the deduplicated voxel coordinates
                     deduplicated_coords = np.array(list(grasp_coords_set))
                     valid_grasps.append(deduplicated_coords)
@@ -829,7 +834,7 @@ class VoxelDataset(Dataset):
         print(f"Saved {len(all_points)} grasp coordinate points to {save_path}")
         return save_path
     
-    def convert_scene_grasps_to_sequence(self, scene_grasps: Dict[int, List]) -> Seq:
+    def convert_scene_grasps_to_sequence(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> Seq:
         """
         Convert scene_grasps data to GRASP sequence following grammar definition
         
@@ -843,7 +848,7 @@ class VoxelDataset(Dataset):
         Returns:
             Seq: Sequence containing GRASP item following the grammar
         """
-        if not scene_grasps:
+        if not scene_grasps or not valid_grasp_parampc:
             # Return empty GRASP sequence
             empty_grasp = GRASP(gbs=[])
             return Seq(items=[empty_grasp])
@@ -851,10 +856,11 @@ class VoxelDataset(Dataset):
         # Create GB blocks for each object with grasps
         gb_blocks = []
         
-        for obj_id, grasp_list in scene_grasps.items():
+        for obj_id, grasp_list in valid_grasp_parampc.items():  # Use valid_grasp_parampc
             if not grasp_list:
                 continue
                 
+            local_gbs = []
             # Map object_id to shape tag
             if 0 <= obj_id <= 87:
                 shape_tag = f'object{obj_id:02d}'  # object00 to object87
@@ -878,18 +884,24 @@ class VoxelDataset(Dataset):
                     # Sort CBs by coordinates for consistent ordering
                     cbs.sort(key=lambda cb: cb.coord)
                     gb = GB(tag=shape_tag, cbs=cbs)
-                    gb_blocks.append(gb)
+                    local_gbs.append(gb)
+
+            if len(local_gbs) > 0:
+                random.shuffle(local_gbs)
+                # Randomly select 1 to 5 elements
+                n = random.randint(1, min(5, len(local_gbs)))
+                gb_blocks.extend(local_gbs[:n])
+                #gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
         
         # Randomly shuffle GB blocks for data diversity
         random.shuffle(gb_blocks)
-        
         # Create GRASP item with all GB blocks
         grasp_item = GRASP(gbs=gb_blocks)
         
         # Return sequence with the GRASP item
         return Seq(items=[grasp_item])
-    
-    def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List]) -> List[int]:
+
+    def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> List[int]:
         """
         Convert scene_grasps to token IDs using the GRASP grammar
         
@@ -900,7 +912,7 @@ class VoxelDataset(Dataset):
             List[int]: List of token IDs representing the GRASP sequence
         """
         # Convert to GRASP sequence
-        grasp_seq = self.convert_scene_grasps_to_sequence(scene_grasps)
+        grasp_seq = self.convert_scene_grasps_to_sequence(scene_grasps, valid_grasp_parampc)
         
         # Serialize to flat tokens
         flat_tokens = Serializer.serialize(grasp_seq)
