@@ -12,15 +12,15 @@ import glob
 import random
 
 try:
-    from .token_manager import get_token_manager
-    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+    from .token_manager import get_token_manager, decode_sequence, encode_sequence
+    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
 except ImportError:
     try:
-        from token_manager import get_token_manager
-        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+        from token_manager import get_token_manager, decode_sequence, encode_sequence
+        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
     except ImportError:
-        from minGPT.token_manager import get_token_manager
-        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+        from minGPT.token_manager import get_token_manager, decode_sequence, encode_sequence
+        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
 
 
 class PrecomputedDataset(Dataset):
@@ -165,6 +165,60 @@ class PrecomputedDataset(Dataset):
         return len(self.data)
 
     
+    def filter_grasp_tokens(self, tokens: List) -> List:
+        """
+        将tokens转成语法AST，对GRASP部分中的GB进行筛选，然后序列化回tokens
+        
+        筛选标准：对于当前tokens所表示的场景中多个SB，每个SB拥有至多5个与之相同TAG的GB
+        
+        Args:
+            tokens: 原始token列表
+            
+        Returns:
+            List: 筛选后的token列表
+        """
+        try:
+            # Step 1: Parse tokens to AST
+            parser = Parser(tokens)
+            ast = parser.parse()
+            
+            
+            # Step 2: 收集所有SB的TAG
+            sb_tags = set()
+            for item in ast.items:
+                if isinstance(item, SB):
+                    sb_tags.add(item.tag)
+            
+
+            
+            
+            # Step 3: 筛选GRASP中的GB
+            for item in ast.items:
+                if isinstance(item, GRASP):
+                    # 统计每个TAG的GB数量
+                    tag_count = {}
+                    filtered_gbs = []
+                    for gb in item.gbs:
+                        # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
+                        if gb.tag in sb_tags:
+                            current_count = tag_count.get(gb.tag, 0)
+                            if current_count < 5:
+                                filtered_gbs.append(gb)
+                                tag_count[gb.tag] = current_count + 1
+
+                    
+                    # 更新GRASP的GB列表
+                    item.gbs = filtered_gbs
+            
+            # Step 4: 序列化AST回tokens
+            filtered_tokens = Serializer.serialize(ast)
+            return filtered_tokens
+            
+        except Exception as e:
+            print(f"Error in filter_grasp_tokens: {e}")
+            # 出错时返回原始tokens
+            return tokens
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
         Get a single sample from the dataset
@@ -175,149 +229,28 @@ class PrecomputedDataset(Dataset):
         sample = self.data[idx]
         
         # Extract precomputed data
-        voxel_data = sample['voxel_data']
-        scene_grasps = sample['scene_grasps']
-        valid_grasp_parampc = sample['valid_grasp_parampc']
-       
+        tokens = sample['raw_tokens']
+        tokens = decode_sequence(tokens, self.token_mapping)
+
+        tokens = self.filter_grasp_tokens(tokens)
+
+        tokens = encode_sequence(tokens, self.token_mapping)
+
+        seq_len = len(tokens)
 
 
-        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps, valid_grasp_parampc)
+        tokens = torch.tensor(tokens)
 
-        # 处理token序列（保持原有逻辑）
-        token_sequence = self.tokenizer_fn(voxel_data)
-        if isinstance(token_sequence, torch.Tensor):
-            token_sequence = token_sequence.tolist()
-        elif isinstance(token_sequence, (list, tuple)):
-            token_sequence = list(token_sequence)
-        else:
-            token_sequence = [token_sequence] if token_sequence is not None else []
-        
-        # Convert to tensor
-        if len(token_sequence) == 0:
-            # Handle empty sequences
-            token_sequence = [0]  # Use a default token
-        
-        # Ensure we have a 2D tensor structure for compatibility with model
-        if not isinstance(token_sequence[0], (list, tuple)):
-            # If tokens are 1D, expand to 2D with single feature dimension
-            token_sequence = [[token] for token in token_sequence]
-
-        
-        tokens = torch.tensor(token_sequence, dtype=torch.long)
-        grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
-
-        tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
-        
-        # Handle sequence length
-        seq_len = tokens.shape[0]
-        num_features = tokens.shape[1] if tokens.dim() > 1 else 1
-
-        
         if seq_len > self.max_sequence_length:
             # Truncate if too long
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
-        
+       
 
-        return tokens, seq_len, scene_grasps
+        return tokens, seq_len, None
 
     def get_vocab_size(self) -> int:
         """Get vocabulary size from token_manager"""
         return len(self.token_mapping)
 
-    def convert_scene_grasps_to_sequence(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> Seq:
-        """
-        Convert scene_grasps data to GRASP sequence following grammar definition
-        
-        Grammar: GRASP → 'detectgrasp' GB*
-                 GB    → 'grasp' TAG CB+
-        
-        Args:
-            scene_grasps: Dictionary mapping object_id to list of grasp coordinates
-                         Each grasp is represented as deduplicated voxel coordinates
-        
-        Returns:
-            Seq: Sequence containing GRASP item following the grammar
-        """
-        if not scene_grasps or not valid_grasp_parampc:
-            # Return empty GRASP sequence
-            empty_grasp = GRASP(gbs=[])
-            return Seq(items=[empty_grasp])
-        
-        # Create GB blocks for each object with grasps
-        gb_blocks = []
-        
-        for obj_id, grasp_list in valid_grasp_parampc.items():  # Use valid_grasp_parampc
-            if not grasp_list:
-                continue
-                
-            local_gbs = []
-            # Map object_id to shape tag
-            if 0 <= obj_id <= 87:
-                shape_tag = f'object{obj_id:02d}'  # object00 to object87
-            else:
-                shape_tag = 'unknow'  # fallback for out-of-range object_ids
-            
-            # Create one GB for each grasp in the grasp_list
-            for grasp_coords in grasp_list:
-                # grasp_coords is an array of deduplicated voxel coordinates for one grasp
-                cbs = []
-                for coord in grasp_coords:
-                    # Ensure coordinate is a tuple of 3 integers
-                    if len(coord) == 3:
-                        x, y, z = int(coord[0]), int(coord[1]), int(coord[2])
-                        
-                        # Check bounds against volume dimensions
-                        coord_tuple = (x, y, z)
-                        cb = CB(coord=coord_tuple)
-                        cbs.append(cb)
-                
-                # Create GB for this individual grasp if we have at least one coordinate
-                if cbs:
-                    # Sort CBs by coordinates for consistent ordering
-                    cbs.sort(key=lambda cb: cb.coord)
-                    gb = GB(tag=shape_tag, cbs=cbs)
-                    local_gbs.append(gb)
-
-            if len(local_gbs) > 0:
-                random.shuffle(local_gbs)
-                # Randomly select 1 to 5 elements
-                n = random.randint(1, min(5, len(local_gbs)))
-                gb_blocks.extend(local_gbs[:n])
-                #gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
-        
-        # Randomly shuffle GB blocks for data diversity
-        random.shuffle(gb_blocks)
-        # Create GRASP item with all GB blocks
-        grasp_item = GRASP(gbs=gb_blocks)
-        
-        # Return sequence with the GRASP item
-        return Seq(items=[grasp_item])
-
-    def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> List[int]:
-        """
-        Convert scene_grasps to token IDs using the GRASP grammar
-        
-        Args:
-            scene_grasps: Dictionary mapping object_id to list of grasp coordinates
-        
-        Returns:
-            List[int]: List of token IDs representing the GRASP sequence
-        """
-        # Convert to GRASP sequence
-        grasp_seq = self.convert_scene_grasps_to_sequence(scene_grasps, valid_grasp_parampc)
-        
-        # Serialize to flat tokens
-        flat_tokens = Serializer.serialize(grasp_seq)
-        
-        # Convert tokens to token IDs using the mapping
-        token_ids = []
-        for token in flat_tokens:
-            if token in self.token_mapping:
-                token_ids.append(self.token_mapping[token])
-            else:
-                print(f"Warning: Unknown token '{token}' not in mapping")
-                # Skip unknown tokens for robustness
-                continue
-        
-        return token_ids
+    
