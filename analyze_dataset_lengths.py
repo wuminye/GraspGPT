@@ -58,22 +58,38 @@ def analyze_sample_lengths(dataset, sample_size=None):
             else:
                 token_length = len(tokens)
             
-            # Get voxel and color group information from raw data
+            # Get voxel and color group information from decoded tokens
             sample = dataset.data[idx]
-            voxel_data = sample['voxel_data']
+            raw_tokens = sample['raw_tokens']
             
-            # Calculate total voxels and color groups count
-            total_voxels = 0
-            color_groups = set()
+            # Decode tokens to get original token list
+            from graspGPT.model.token_manager import decode_sequence
+            decoded_tokens = decode_sequence(raw_tokens, dataset.token_mapping)
             
-            for color, coordinates in voxel_data:
-                if hasattr(coordinates, 'shape'):
-                    total_voxels += coordinates.shape[0]
-                else:
-                    total_voxels += len(coordinates)
-                color_groups.add(color)
-            
-            num_color_groups = len(color_groups)
+            # Parse tokens to AST to extract voxel information
+            try:
+                parser = Parser(decoded_tokens)
+                ast = parser.parse()
+                
+                # Calculate total voxels and color groups (object tags) count
+                total_voxels = 0
+                color_groups = set()
+                
+                # Count voxels and object tags from SB items
+                for item in ast.items:
+                    if isinstance(item, SB):
+                        # Count coordinate blocks (CBs) as voxels
+                        total_voxels += len(item.cbs)
+                        # Add object tag as color group equivalent
+                        color_groups.add(item.tag)
+                
+                num_color_groups = len(color_groups)
+                
+            except Exception as parse_error:
+                print(f"Warning: Failed to parse tokens for sample {idx}: {parse_error}")
+                # Fallback: estimate from token count
+                total_voxels = len(raw_tokens) // 10  # rough estimate
+                num_color_groups = 1  # minimal estimate
             
             lengths.append(token_length)
             voxel_counts.append(total_voxels)
@@ -482,8 +498,8 @@ def main():
     
     # Distribution across different length intervals
     print(f"\n=== Length Interval Distribution ===")
-    bins = [0, 100, 500, 1000, 1500, 2000, 3000, 5000,  max_seq_len, np.inf]
-    labels = ['<100', '100-500', '500-1000', '1000-1500', '1500-2000', '2000-3000', '3000-5000', f'5000-{max_seq_len}', f'>{max_seq_len}']
+    bins = [0, 100, 500, 1000, 1500, 2000, 3000, 4000,  max_seq_len, np.inf]
+    labels = ['<100', '100-500', '500-1000', '1000-1500', '1500-2000', '2000-3000', '3000-4000', f'4000-{max_seq_len}', f'>{max_seq_len}']
     
     hist, _ = np.histogram(lengths, bins=bins)
     for i, (label, count) in enumerate(zip(labels, hist)):
