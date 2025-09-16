@@ -233,21 +233,11 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     print(f"正在提取样本 {sample_idx}...")
     
     # 获取样本
-    tokens, max_seq_len, scene_grasps = dataset[sample_idx]
-
-   
+    tokens, max_seq_len, _ = dataset[sample_idx]
 
     print(f"Tokens shape: {tokens.shape}")
     print(f"Max sequence length: {max_seq_len}")
-    print(f"Scene grasps: {len(scene_grasps)} 个对象")
 
-
-    
-    # 转换token ids到序列
-    print("正在转换token ids到序列...")
-    token_ids = tokens.flatten().tolist() if tokens.dim() > 1 else tokens.tolist()
-    seq = tokens_ids_to_sequence(token_ids, dataset.token_mapping)
-    
     # 获取体素信息
     volume_dims = dataset.volume_dims
     bbox_min = dataset.bbox_min
@@ -259,42 +249,16 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     sample_dir = Path(output_dir) / f"sample_{sample_idx}"
     sample_dir.mkdir(parents=True, exist_ok=True)
     
-    # 保存原始序列信息
-    with open(sample_dir / "sequence_info.txt", 'w', encoding='utf-8') as f:
-        f.write(f"Sample Index: {sample_idx}\n")
-        f.write(f"Token IDs Count: {len(token_ids)}\n")
-        f.write(f"Sequence Items: {len(seq.items)}\n")
-        f.write(f"Volume Dims: {volume_dims}\n")
-        f.write(f"Bbox Min: {bbox_min}\n")
-        f.write(f"Voxel Size: {voxel_size}\n\n")
-        f.write("Parsed Sequence:\n")
-        f.write(str(seq))
-
-
-    
-    
-    # 提取并保存SB点云
-    print("正在提取SB点云...")
-    sb_clouds = extract_sb_pointclouds(seq, volume_dims, bbox_min, voxel_size)
-    
-    for tag, points in sb_clouds.items():
-        colors = generate_colors_for_object(tag, len(points))
-        filename = sample_dir / f"sb_{tag}.ply"
-        save_pointcloud_as_ply(points, str(filename), colors)
-    
-    # 提取并保存GRASP点云
-    print("正在提取GRASP点云...")
-    grasp_clouds = extract_grasp_pointclouds(seq, volume_dims, bbox_min, voxel_size)
-    
-    for tag, grasp_list in grasp_clouds.items():
-        for i, points in enumerate(grasp_list):
-            # 为抓取点云使用不同的颜色（更亮的颜色）
-            colors = generate_colors_for_object(tag, len(points))
-            colors = np.minimum(colors * 1.5, 255).astype(np.uint8)  # 增加亮度
-            filename = sample_dir / f"grasp_{tag}_{i}.ply"
-            save_pointcloud_as_ply(points, str(filename), colors)
-    
-   
+    # 使用visualize_tokens函数来保存点云
+    print("使用visualize_tokens保存点云...")
+    visualize_tokens(
+        tokens=tokens,
+        token_mapping=dataset.token_mapping,
+        volume_dims=volume_dims,
+        bbox_min=bbox_min,
+        voxel_size=voxel_size,
+        output_dir=str(sample_dir)
+    )
     
     print(f"样本 {sample_idx} 处理完成，结果保存在: {sample_dir}")
 
@@ -342,15 +306,33 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
     print("正在提取SB点云...")
     sb_clouds = extract_sb_pointclouds(seq, volume_dims, bbox_min, voxel_size)
     
+    # 保存单独的SB点云
     for tag, points in sb_clouds.items():
         colors = generate_colors_for_object(tag, len(points))
         filename = output_path / f"sb_{tag}.ply"
         save_pointcloud_as_ply(points, str(filename), colors)
     
+    # 合并所有SB点云
+    all_sb_points = []
+    all_sb_colors = []
+    for tag, points in sb_clouds.items():
+        if len(points) > 0:
+            all_sb_points.append(points)
+            colors = generate_colors_for_object(tag, len(points))
+            all_sb_colors.append(colors)
+    
+    if all_sb_points:
+        merged_sb_points = np.vstack(all_sb_points)
+        merged_sb_colors = np.vstack(all_sb_colors)
+        filename = output_path / "merged_all_sb.ply"
+        save_pointcloud_as_ply(merged_sb_points, str(filename), merged_sb_colors)
+        print(f"合并所有SB点云: {len(merged_sb_points)} 个点")
+    
     # 提取并保存GRASP点云
     print("正在提取GRASP点云...")
     grasp_clouds = extract_grasp_pointclouds(seq, volume_dims, bbox_min, voxel_size)
     
+    # 保存单独的GRASP点云
     for tag, grasp_list in grasp_clouds.items():
         for i, points in enumerate(grasp_list):
             # 为抓取点云使用不同的颜色（更亮的颜色）
@@ -358,6 +340,24 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
             colors = np.minimum(colors * 1.5, 255).astype(np.uint8)  # 增加亮度
             filename = output_path / f"grasp_{tag}_{i}.ply"
             save_pointcloud_as_ply(points, str(filename), colors)
+    
+    # 合并所有GRASP点云
+    all_grasp_points = []
+    all_grasp_colors = []
+    for tag, grasp_list in grasp_clouds.items():
+        for points in grasp_list:
+            if len(points) > 0:
+                all_grasp_points.append(points)
+                colors = generate_colors_for_object(tag, len(points))
+                colors = np.minimum(colors * 1.5, 255).astype(np.uint8)  # 增加亮度
+                all_grasp_colors.append(colors)
+
+    if all_grasp_points:
+        merged_grasp_points = np.vstack(all_grasp_points)
+        merged_grasp_colors = np.vstack(all_grasp_colors)
+        filename = output_path / "merged_all_grasp.ply"
+        save_pointcloud_as_ply(merged_grasp_points, str(filename), merged_grasp_colors)
+        print(f"合并所有GRASP点云: {len(merged_grasp_points)} 个点")
     
     print(f"tokens可视化完成，结果保存在: {output_path}")
     return output_path
