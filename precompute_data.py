@@ -8,8 +8,6 @@ import random
 import argparse
 from multiprocessing import Pool, Queue, Manager
 from functools import partial
-from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
-import time
 
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent
@@ -92,7 +90,7 @@ def main():
     # 数据集参数
     max_sequence_length = 3512
     grasp_data_path = 'data'
-    max_grasps_per_object = 100
+    max_grasps_per_object = 50
     
     try:
         # 创建数据集（只创建一次）
@@ -141,45 +139,22 @@ def main():
         # 创建初始化函数，传递数据集
         init_func = partial(init_worker, dataset)
         
-        timeout_seconds = 150  # 每个任务超时时间（秒）
-        
-        with ProcessPoolExecutor(max_workers=num_processes, initializer=init_func) as executor:
-            # 提交所有任务
-            futures = {executor.submit(process_single_ind, ind): ind for ind in range(len(dataset))}
-            
-            # 处理结果，包含超时处理
-            completed_tasks = 0
-            
-            with tqdm(total=len(dataset), desc="多进程处理数据集") as pbar:
-                for future in as_completed(futures, timeout=None):
-                    ind = futures[future]
-                    try:
-                        # 尝试获取结果，设置单个任务的超时
-                        ind_results = future.result(timeout=timeout_seconds)
-                        # 将结果添加到总列表
-                        all_results.extend(ind_results)
-                        completed_tasks += 1
-                        pbar.update(1)
-                        
-                        # 每3000次保存一个文件
-                        if len(all_results) >= batch_size:
-                            output_path = output_dir / f"precomputed_batch_{random_id}_{batch_count}.pth"
-                            torch.save(all_results, output_path)
-                            print(f"已保存批次 {batch_count}: {output_path} (包含 {len(all_results)} 个样本)")
-                            total_saved += len(all_results)
-                            all_results = []  # 清空列表
-                            batch_count += 1
-                        
-                    except TimeoutError:
-                        print(f"任务 {ind} 超时({timeout_seconds}秒)，跳过该任务")
-                        completed_tasks += 1
-                        pbar.update(1)
-                        continue
-                    except Exception as e:
-                        print(f"任务 {ind} 处理出错，跳过: {e}")
-                        completed_tasks += 1
-                        pbar.update(1)
-                        continue
+        with Pool(processes=num_processes, initializer=init_func) as pool:
+            # 使用imap显示进度条
+            for ind_results in tqdm(pool.imap(process_single_ind, range(len(dataset))), 
+                                   total=len(dataset), desc="多进程处理数据集"):
+                
+                # 将结果添加到总列表
+                all_results.extend(ind_results)
+                
+                # 每3000次保存一个文件
+                if len(all_results) >= batch_size:
+                    output_path = output_dir / f"precomputed_batch_{random_id}_{batch_count}.pth"
+                    torch.save(all_results, output_path)
+                    print(f"已保存批次 {batch_count}: {output_path} (包含 {len(all_results)} 个样本)")
+                    total_saved += len(all_results)
+                    all_results = []  # 清空列表
+                    batch_count += 1
     else:
         # 使用单进程处理
         print("使用单进程处理")
