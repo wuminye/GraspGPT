@@ -226,7 +226,37 @@ class VoxelDataset(Dataset):
         # 过滤与场景occupancy碰撞的grasps
         scene_grasps, scene_grasp_parampc = self._filter_colliding_grasps(scene_grasps, scene_grasp_parampc, voxel_data, self.max_grasps_per_object)
 
-        return voxel_data, scene_grasps, scene_grasp_parampc
+
+        grasp_token_ids = self.convert_scene_grasps_to_tokens(scene_grasps, scene_grasp_parampc)
+
+
+        # 处理token序列（保持原有逻辑）
+        token_sequence = self.tokenizer_fn(voxel_data)
+        if isinstance(token_sequence, torch.Tensor):
+            token_sequence = token_sequence.tolist()
+        elif isinstance(token_sequence, (list, tuple)):
+            token_sequence = list(token_sequence)
+        else:
+            token_sequence = [token_sequence] if token_sequence is not None else []
+        
+        # Convert to tensor
+        if len(token_sequence) == 0:
+            # Handle empty sequences
+            token_sequence = [0]  # Use a default token
+        
+        # Ensure we have a 2D tensor structure for compatibility with model
+        if not isinstance(token_sequence[0], (list, tuple)):
+            # If tokens are 1D, expand to 2D with single feature dimension
+            token_sequence = [[token] for token in token_sequence]
+
+        
+        tokens = torch.tensor(token_sequence, dtype=torch.long)
+        grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
+
+        tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
+        
+
+        return tokens
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
@@ -886,15 +916,15 @@ class VoxelDataset(Dataset):
                     gb = GB(tag=shape_tag, cbs=cbs)
                     local_gbs.append(gb)
 
-            if len(local_gbs) > 0:
-                random.shuffle(local_gbs)
-                # Randomly select 1 to 5 elements
-                n = random.randint(1, min(5, len(local_gbs)))
-                gb_blocks.extend(local_gbs[:n])
-                #gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
+            #if len(local_gbs) > 0:
+            #    random.shuffle(local_gbs)
+            # Randomly select 1 to 5 elements
+            #    n = random.randint(1, min(5, len(local_gbs)))
+            #    gb_blocks.extend(local_gbs[:n])
+            #    gb_blocks.extend(local_gbs[:min(5, len(local_gbs))])
         
         # Randomly shuffle GB blocks for data diversity
-        random.shuffle(gb_blocks)
+        # random.shuffle(gb_blocks)
         # Create GRASP item with all GB blocks
         grasp_item = GRASP(gbs=gb_blocks)
         

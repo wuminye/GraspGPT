@@ -50,17 +50,15 @@ def process_single_ind(ind):
     
     results = []
     for j in range(Repeat_times):
-        voxel_data, scene_grasps, valid_grasp_parampc = global_dataset.prepare_data(ind)
-        
-        # 转换为uint8
-        voxel_data_uint8 = convert_to_uint8(voxel_data)
-        scene_grasps_uint8 = convert_to_uint8(scene_grasps)
-        valid_grasp_parampc_uint8 = convert_to_uint8(valid_grasp_parampc)
+        tokens = global_dataset.prepare_data(ind)
+        tokens = tokens.squeeze().tolist()
+
 
         results.append({
-            'voxel_data': voxel_data_uint8,
-            'scene_grasps': scene_grasps_uint8,
-            'valid_grasp_parampc': valid_grasp_parampc_uint8,
+            #'voxel_data': voxel_data_uint8,
+            #'scene_grasps': scene_grasps_uint8,
+            #'valid_grasp_parampc': valid_grasp_parampc_uint8,
+            'raw_tokens': tokens,
             'ind': ind,
             'repeat': j,
             'volume_dims': global_dataset.volume_dims,
