@@ -435,7 +435,7 @@ def main():
     try:
         dataset = PrecomputedDataset(
             data_path=data_path,
-            max_sequence_length=8192
+            max_sequence_length=5000
         )
         
         print(f"Dataset size: {len(dataset)} samples")

@@ -19,7 +19,7 @@ from graspGPT.model.core import save_voxels
 from graspGPT.model.token_manager import get_token_manager
 
 
-Repeat_times = 1
+Repeat_times = 2
 
 
 def convert_to_uint8(data):

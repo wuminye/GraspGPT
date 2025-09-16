@@ -202,7 +202,7 @@ class PrecomputedDataset(Dataset):
                         # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                         if gb.tag in sb_tags:
                             current_count = tag_count.get(gb.tag, 0)
-                            if current_count < 4:
+                            if current_count < 3:
                                 filtered_gbs.append(gb)
                                 tag_count[gb.tag] = current_count + 1
 
