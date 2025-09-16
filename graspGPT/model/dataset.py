@@ -579,7 +579,7 @@ class VoxelDataset(Dataset):
                                                fric_coef_thresh=0.4, grasp_height=0.02)
 
                 
-                sample_group = grasp_group.random_sample(numGrasp = 5000)
+                sample_group = grasp_group.random_sample(numGrasp = 300)
                 grasp_parampc = sample_group.to_parampc_list()  # (num_grasps, 3, 3)
 
                 grasp_group = sample_group.to_open3d_geometry_list()  

@@ -92,7 +92,7 @@ def main():
     # 数据集参数
     max_sequence_length = 3512
     grasp_data_path = 'data'
-    max_grasps_per_object = -1
+    max_grasps_per_object = 100
     
     try:
         # 创建数据集（只创建一次）
