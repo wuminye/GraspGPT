@@ -202,11 +202,11 @@ class PrecomputedDataset(Dataset):
                         # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                         if gb.tag in sb_tags:
                             current_count = tag_count.get(gb.tag, 0)
-                            if current_count < 5:
+                            if current_count < 4:
                                 filtered_gbs.append(gb)
                                 tag_count[gb.tag] = current_count + 1
 
-                    
+                    random.shuffle(filtered_gbs)
                     # 更新GRASP的GB列表
                     item.gbs = filtered_gbs
             
@@ -245,6 +245,8 @@ class PrecomputedDataset(Dataset):
             # Truncate if too long
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
+
+        tokens = tokens.unsqueeze(-1)
        
 
         return tokens, seq_len, None

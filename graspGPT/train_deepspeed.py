@@ -79,7 +79,7 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/precomputed_data/"
-    C.dataset.max_sequence_length = 5000
+    C.dataset.max_sequence_length = 1000
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
     
