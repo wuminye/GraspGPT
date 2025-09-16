@@ -254,7 +254,6 @@ class VoxelDataset(Dataset):
         grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
 
         tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
-        
 
         return tokens
     
@@ -916,7 +915,8 @@ class VoxelDataset(Dataset):
                     gb = GB(tag=shape_tag, cbs=cbs)
                     local_gbs.append(gb)
 
-            #if len(local_gbs) > 0:
+            if len(local_gbs) > 0:
+                gb_blocks.extend(local_gbs)
             #    random.shuffle(local_gbs)
             # Randomly select 1 to 5 elements
             #    n = random.randint(1, min(5, len(local_gbs)))
@@ -946,7 +946,7 @@ class VoxelDataset(Dataset):
         
         # Serialize to flat tokens
         flat_tokens = Serializer.serialize(grasp_seq)
-        
+     
         # Convert tokens to token IDs using the mapping
         token_ids = []
         for token in flat_tokens:
