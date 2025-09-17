@@ -185,12 +185,16 @@ class PrecomputedDataset(Dataset):
             
             # Step 2: 收集所有SB的TAG
             sb_tags = set()
+            sb_list = []
             for item in ast.items:
                 if isinstance(item, SB):
                     sb_tags.add(item.tag)
+                    sb_list.append(item)
             
 
-            
+            random.shuffle(sb_list)
+
+            grasp_block = None
             
             # Step 3: 筛选GRASP中的GB
             for item in ast.items:
@@ -202,22 +206,28 @@ class PrecomputedDataset(Dataset):
                         # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                         if gb.tag in sb_tags:
                             current_count = tag_count.get(gb.tag, 0)
-                            if current_count < 3:
+                            if current_count < 4:
                                 filtered_gbs.append(gb)
                                 tag_count[gb.tag] = current_count + 1
 
                     random.shuffle(filtered_gbs)
                     # 更新GRASP的GB列表
                     item.gbs = filtered_gbs
+                    grasp_block = item
             
+            if grasp_block is not None:
+                sb_list.append(grasp_block)
+
+
             # Step 4: 序列化AST回tokens
-            filtered_tokens = Serializer.serialize(ast)
+            filtered_tokens = Serializer.serialize(Seq(items=sb_list))
             return filtered_tokens
             
         except Exception as e:
             print(f"Error in filter_grasp_tokens: {e}")
             # 出错时返回原始tokens
             return tokens
+
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int, Dict[int, np.ndarray]]:
         """
