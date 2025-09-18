@@ -45,19 +45,15 @@ class PrecomputedDataset(Dataset):
         self.max_sequence_length = max_sequence_length
         
         # Load all precomputed data files
+        self.volume_dims = None
         self.data = self._load_precomputed_data()
         
         # Setup token manager and tokenizer
         token_manager = get_token_manager()
         if len(self.data) > 0:
-            volume_dims = self.data[0]['volume_dims']
+            volume_dims = self.volume_dims
             self.token_mapping = token_manager.generate_mapping(volume_dims[0], volume_dims[1], volume_dims[2])
             self.tokenizer_fn = self._create_tokenizer(self.token_mapping)
-
-            self.volume_dims = volume_dims
-            self.bbox_min = self.data[0]['bbox_min']
-            self.bbox_max = self.data[0]['bbox_max']
-            self.voxel_size = self.data[0]['voxel_size']
         else:
             raise ValueError("No data loaded")
     
@@ -77,7 +73,16 @@ class PrecomputedDataset(Dataset):
         for file_path in sorted(pth_files):
             print(f"Loading {file_path.name}...")
             data_batch = torch.load(file_path, weights_only=False)
-            all_data.extend(data_batch)
+            if self.volume_dims is None:
+                self.volume_dims = data_batch[0]['volume_dims']
+                self.bbox_min = data_batch[0]['bbox_min']
+                self.bbox_max = data_batch[0]['bbox_max']
+                self.voxel_size = data_batch[0]['voxel_size']
+
+            for item in data_batch:
+                all_data.append(item['raw_tokens'])
+
+        
         
         print(f"Loaded {len(all_data)} precomputed samples from {len(pth_files)} files")
         return all_data
@@ -237,10 +242,9 @@ class PrecomputedDataset(Dataset):
         Returns same format as VoxelDataset:
             tuple: (tokens, max_sequence_length, scene_grasps)
         """
-        sample = self.data[idx]
+        tokens = self.data[idx]
         
-        # Extract precomputed data
-        tokens = sample['raw_tokens']
+
         tokens = decode_sequence(tokens, self.token_mapping)
 
         tokens = self.filter_grasp_tokens(tokens)
