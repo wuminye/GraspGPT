@@ -69,7 +69,8 @@ class PrecomputedDataset(Dataset):
         if not pth_files:
             raise ValueError(f"No .pth files found in {self.data_path}")
         
-        all_data = []
+        # Collect all data first to analyze lengths
+        all_raw_data = []
         for file_path in sorted(pth_files):
             print(f"Loading {file_path.name}...")
             data_batch = torch.load(file_path, weights_only=False)
@@ -80,11 +81,26 @@ class PrecomputedDataset(Dataset):
                 self.voxel_size = data_batch[0]['voxel_size']
 
             for item in data_batch:
-                all_data.append(item['raw_tokens'])
+                all_raw_data.append(item['raw_tokens'])
 
+        # Optimize memory layout for better cache performance
+        # Sort by length to improve memory locality during sequential access
+        all_raw_data.sort(key=len)
         
+        # Convert to numpy arrays for better memory efficiency and cache performance
+        all_data = []
+        for tokens in all_raw_data:
+            # Convert to numpy array with specific dtype to save memory
+            if len(tokens) > 0:
+                # Use int32 if all values fit, otherwise int64
+                max_val = max(tokens) if tokens else 0
+                dtype = np.int32 if max_val < 2**31 else np.int64
+                all_data.append(np.array(tokens, dtype=dtype))
+            else:
+                all_data.append(np.array([], dtype=np.int32))
         
         print(f"Loaded {len(all_data)} precomputed samples from {len(pth_files)} files")
+        print(f"Memory optimized: sorted by length, using numpy arrays with appropriate dtypes")
         return all_data
     
     def _create_tokenizer(self, token_mapping: dict):
@@ -184,9 +200,9 @@ class PrecomputedDataset(Dataset):
         """
         try:
             # Step 1: Parse tokens to AST
-            #parser = Parser(tokens)
-            #ast = parser.parse()
-            ast = parse_with_cpp(tokens)
+            parser = Parser(tokens)
+            ast = parser.parse()
+            #ast = parse_with_cpp(tokens)
             
             
             # Step 2: 收集所有SB的TAG
@@ -244,6 +260,9 @@ class PrecomputedDataset(Dataset):
         """
         tokens = self.data[idx]
         
+        # Convert numpy array to list for processing
+        if isinstance(tokens, np.ndarray):
+            tokens = tokens.tolist()
 
         tokens = decode_sequence(tokens, self.token_mapping)
 
@@ -253,8 +272,7 @@ class PrecomputedDataset(Dataset):
 
         seq_len = len(tokens)
 
-
-        tokens = torch.tensor(tokens)
+        tokens = torch.tensor(tokens, dtype=torch.long)
 
         if seq_len > self.max_sequence_length:
             # Truncate if too long
