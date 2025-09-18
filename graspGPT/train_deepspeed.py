@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 import wandb
 import deepspeed
 from deepspeed import comm as dist
+from tqdm import tqdm
 
 # Import local modules
 try:
@@ -541,6 +542,17 @@ def main():
         iter_num = start_iter
         data_iter = iter(train_loader)
         
+        # Initialize progress bar (only on rank 0)
+        if rank == 0:
+            progress_bar = tqdm(
+                initial=start_iter,
+                total=config.trainer.max_iters,
+                desc="Training",
+                unit="iter",
+                ncols=120,
+                dynamic_ncols=True
+            )
+        
         while iter_num < config.trainer.max_iters:
             try:
                 batch = next(data_iter)
@@ -555,6 +567,17 @@ def main():
             iter_start_time = time.time()
             loss = training_step(model_engine, batch, config)
             iter_time = time.time() - iter_start_time
+            
+            # Update progress bar (only on rank 0)
+            if rank == 0:
+                lr = model_engine.get_lr()[0]
+                loss_value = loss.item()
+                progress_bar.set_postfix({
+                    'Loss': f'{loss_value:.4f}',
+                    'LR': f'{lr:.2e}',
+                    'Time/iter': f'{iter_time*1000:.1f}ms'
+                })
+                progress_bar.update(1)
             
             # Logging
             if iter_num % config.system.log_every == 0:
@@ -578,7 +601,7 @@ def main():
             # Checkpointing
             if iter_num % config.system.save_every == 0 and iter_num > 0:
                 if rank == 0:
-                    print(f"Saving checkpoint at iteration {iter_num}")
+                    progress_bar.write(f"Saving checkpoint at iteration {iter_num}")
                 checkpoint_path = save_checkpoint(
                     model_engine,
                     config,
@@ -590,6 +613,10 @@ def main():
                     log_message(f"Checkpoint saved: {checkpoint_path}", log_file)
             
             iter_num += 1
+        
+        # Close progress bar
+        if rank == 0:
+            progress_bar.close()
         
         # Save final checkpoint
         if rank == 0:
@@ -609,6 +636,9 @@ def main():
     except KeyboardInterrupt:
         if rank == 0:
             print("\nTraining interrupted by user")
+            # Close progress bar if it exists
+            if 'progress_bar' in locals():
+                progress_bar.close()
         log_message("Training interrupted by user", log_file)
         # Save checkpoint before exit
         if 'model_engine' in locals():
@@ -624,6 +654,10 @@ def main():
         if config.wandb.enabled and wandb.run is not None and rank == 0:
             wandb.finish()
     except Exception as e:
+        if rank == 0:
+            # Close progress bar if it exists
+            if 'progress_bar' in locals():
+                progress_bar.close()
         error_msg = f"Training failed with error: {str(e)}"
         if rank == 0:
             print(error_msg)
