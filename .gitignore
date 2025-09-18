@@ -12,3 +12,7 @@
 /graspGPT/output
 /__pycache__
 /.ipynb_checkpoints
+/graspGPT/model/csrc/build
+/graspGPT/model/csrc/dist
+/graspGPT/model/csrc/parser_cpp.egg-info
+*.o

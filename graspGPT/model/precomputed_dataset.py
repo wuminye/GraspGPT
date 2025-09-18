@@ -13,14 +13,14 @@ import random
 
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
-    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
+    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
 except ImportError:
     try:
         from token_manager import get_token_manager, decode_sequence, encode_sequence
-        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
+        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
     except ImportError:
         from minGPT.token_manager import get_token_manager, decode_sequence, encode_sequence
-        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser
+        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
 
 
 class PrecomputedDataset(Dataset):
@@ -179,8 +179,9 @@ class PrecomputedDataset(Dataset):
         """
         try:
             # Step 1: Parse tokens to AST
-            parser = Parser(tokens)
-            ast = parser.parse()
+            #parser = Parser(tokens)
+            #ast = parser.parse()
+            ast = parse_with_cpp(tokens)
             
             
             # Step 2: 收集所有SB的TAG
