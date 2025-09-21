@@ -608,7 +608,7 @@ class VoxelDataset(Dataset):
                                                fric_coef_thresh=0.4, grasp_height=0.02)
 
                 
-                sample_group = grasp_group.random_sample(numGrasp = 1500)
+                sample_group = grasp_group.random_sample(numGrasp = 2500)
                 grasp_parampc = sample_group.to_parampc_list()  # (num_grasps, 3, 3)
 
                 grasp_group = sample_group.to_open3d_geometry_list()  
@@ -885,7 +885,7 @@ class VoxelDataset(Dataset):
         # Create GB blocks for each object with grasps
         gb_blocks = []
         
-        for obj_id, grasp_list in scene_grasps.items():  # Use valid_grasp_parampc
+        for obj_id, grasp_list in valid_grasp_parampc.items():  # Use valid_grasp_parampc
             if not grasp_list:
                 continue
                 
