@@ -165,6 +165,8 @@ def main():
                        help='Maximum sequence length (default: 1024)')
     parser.add_argument('--test-single', action='store_true',
                        help='Also test individual sample access speed')
+
+    
     
     args = parser.parse_args()
     
@@ -176,6 +178,11 @@ def main():
     print("PrecomputedDataset Throughput Benchmark")
     print("=" * 80)
     
+
+    # Optional single sample test
+    if args.test_single:
+        test_single_sample_speed(str(data_path))
+
     # Main benchmark
     results = benchmark_dataset(
         data_path=str(data_path),
@@ -185,9 +192,7 @@ def main():
         max_sequence_length=args.max_seq_len
     )
     
-    # Optional single sample test
-    if args.test_single:
-        test_single_sample_speed(str(data_path))
+
     
     print("\nBenchmark completed!")
 

@@ -13,16 +13,29 @@ import os
 import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from itertools import permutations
+
+import open3d as o3d
 
 # 导入必要的模块
 try:
     from graspGPT.model.precomputed_dataset import PrecomputedDataset
     from graspGPT.model.token_manager import get_token_manager, decode_sequence
-    from graspGPT.model.parser_and_serializer import Parser, Serializer, Seq, SB, GRASP
+    from graspGPT.model.parser_and_serializer import Parser, Serializer, Seq, SB, GRASP, parse_with_cpp
+    from blender.process_grasp import interior_points_to_gripper_params, Grasp
 except ImportError:
     print("Warning: 无法导入graspGPT模块，请确保在正确的环境中运行")
     import sys
     sys.exit(1)
+
+DEFAULT_GRASP_HEIGHT = 0.02
+COORD_TRANSFORM = np.array([
+    [-1, 0, 0, 0],
+    [0, -1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+], dtype=np.float32)
+COORD_TRANSFORM_INV = np.linalg.inv(COORD_TRANSFORM)
 
 def save_pointcloud_as_ply(points: np.ndarray, filename: str, colors: Optional[np.ndarray] = None):
     """
@@ -93,8 +106,10 @@ def tokens_ids_to_sequence(token_ids: List[int], token_mapping: Dict) -> Seq:
         print(f"前10个tokens: {decoded_tokens[:10] if len(decoded_tokens) > 10 else decoded_tokens}")
         
         # 使用parser解析tokens为AST
-        parser = Parser(decoded_tokens)
-        seq = parser.parse()
+        #parser = Parser(decoded_tokens)
+        #seq = parser.parse()
+
+        seq = parse_with_cpp(decoded_tokens)
         
         print(f"解析成功，序列包含 {len(seq.items)} 个项目")
         return seq
@@ -177,7 +192,7 @@ def extract_grasp_pointclouds(seq: Seq, volume_dims: Tuple[int, int, int],
 def generate_colors_for_object(tag: str, num_points: int) -> np.ndarray:
     """
     为对象生成颜色
-    
+
     Args:
         tag: 对象标签
         num_points: 点数量
@@ -204,8 +219,89 @@ def generate_colors_for_object(tag: str, num_points: int) -> np.ndarray:
             color = [128, 128, 128]  # 默认灰色
     else:
         color = [128, 128, 128]  # unknow等其他标签用灰色
-    
+
     return np.array([color] * num_points)
+
+
+def reconstruct_grasp_from_points(points: np.ndarray) -> Optional[Grasp]:
+    """尝试从抓取点云的3个内点还原一个Grasp对象。"""
+    points = np.asarray(points, dtype=np.float32)
+    if points.shape != (3, 3):
+        return None
+
+    # 将点转换回grasp参数坐标系
+    homogeneous = np.hstack([points, np.ones((points.shape[0], 1), dtype=points.dtype)])
+    transformed = (COORD_TRANSFORM_INV @ homogeneous.T).T[:, :3]
+
+    best_candidate: Optional[Tuple[np.ndarray, np.ndarray, float, float]] = None
+    best_cost = np.inf
+
+    for order in permutations(range(3)):
+        left, right, bottom = transformed[list(order)]
+
+        line_vec = right - left
+        lr_dist = np.linalg.norm(line_vec)
+        if lr_dist < 1e-6:
+            continue
+        line_unit = line_vec / lr_dist
+
+        bottom_vec = bottom - left
+        bottom_proj = np.dot(bottom_vec, line_unit)
+        bottom_to_line_vec = bottom_vec - bottom_proj * line_unit
+        bottom_line_dist = np.linalg.norm(bottom_to_line_vec)
+
+        proj_left = np.dot(left - bottom, line_unit)
+        proj_right = np.dot(right - bottom, line_unit)
+        if abs(proj_left) <= abs(proj_right):
+            continue
+
+        cost = bottom_line_dist
+        mid_proj = lr_dist / 2.0
+        cost += abs(bottom_proj - mid_proj)
+        if not (0.0 <= bottom_proj <= lr_dist):
+            cost += 0.05
+
+        try:
+            candidate = interior_points_to_gripper_params(left, right, bottom)
+        except Exception:
+            continue
+
+        center, rotation, width, depth = candidate
+        if not np.isfinite(width) or not np.isfinite(depth) or width <= 0 or depth <= 0:
+            continue
+
+        if cost < best_cost:
+            best_cost = cost
+            best_candidate = candidate
+
+    if best_candidate is None:
+        for order in permutations(range(3)):
+            left, right, bottom = transformed[list(order)]
+            try:
+                candidate = interior_points_to_gripper_params(left, right, bottom)
+            except Exception:
+                continue
+            center, rotation, width, depth = candidate
+            if np.isfinite(width) and np.isfinite(depth) and width > 0 and depth > 0:
+                best_candidate = candidate
+                break
+        if best_candidate is None:
+            return None
+
+    center, rotation, width, depth = best_candidate
+
+    center_h = np.append(center, 1.0)
+    center_world = (COORD_TRANSFORM @ center_h)[:3]
+    rotation_world = COORD_TRANSFORM[:3, :3] @ rotation
+
+    grasp = Grasp()
+    grasp.score = 1.0
+    grasp.width = float(width)
+    grasp.height = DEFAULT_GRASP_HEIGHT
+    grasp.depth = float(depth)
+    grasp.rotation_matrix = rotation_world
+    grasp.translation = center_world
+    return grasp
 
 def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     """
@@ -358,7 +454,28 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
         filename = output_path / "merged_all_grasp.ply"
         save_pointcloud_as_ply(merged_grasp_points, str(filename), merged_grasp_colors)
         print(f"合并所有GRASP点云: {len(merged_grasp_points)} 个点")
-    
+
+    grasp_mesh_dir = output_path / "grasp_meshes"
+    grasp_mesh_dir.mkdir(parents=True, exist_ok=True)
+    mesh_count = 0
+
+    for tag, grasp_list in grasp_clouds.items():
+        for idx, points in enumerate(grasp_list):
+            grasp = reconstruct_grasp_from_points(points)
+            if grasp is None:
+                print(f"Warning: 无法从抓取点云重建mesh (tag={tag}, index={idx})，跳过保存。")
+                continue
+
+            mesh = grasp.to_open3d_geometry()
+            mesh_filename = grasp_mesh_dir / f"grasp_mesh_{tag}_{idx}.ply"
+            o3d.io.write_triangle_mesh(str(mesh_filename), mesh, write_ascii=False, compressed=False, print_progress=False)
+            mesh_count += 1
+
+    if mesh_count > 0:
+        print(f"已生成并保存 {mesh_count} 个抓取mesh，目录: {grasp_mesh_dir}")
+    else:
+        print("未生成任何抓取mesh。")
+
     print(f"tokens可视化完成，结果保存在: {output_path}")
     return output_path
 

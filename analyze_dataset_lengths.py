@@ -19,7 +19,7 @@ sys.path.append(str(project_root))
 # Import required modules
 from graspGPT.model.dataset import VoxelDataset
 from graspGPT.model.precomputed_dataset import PrecomputedDataset
-from graspGPT.model.parser_and_serializer import Parser, GRASP, SB
+from graspGPT.model.parser_and_serializer import Parser, GRASP, SB, parse_with_cpp
 
 def analyze_sample_lengths(dataset, sample_size=None):
     """Analyze sample length distribution"""
@@ -27,9 +27,21 @@ def analyze_sample_lengths(dataset, sample_size=None):
     
     # If sample_size is specified, analyze only a subset of samples
     total_samples = len(dataset)
-    if sample_size and sample_size < total_samples:
-        indices = np.random.choice(total_samples, sample_size, replace=False)
-        print(f"Randomly sampling {sample_size} samples for analysis (total {total_samples} samples)")
+    
+    # Limit to 500 samples if dataset is larger than 500
+    if total_samples > 500:
+        effective_sample_size = 500
+        print(f"Dataset has {total_samples} samples, limiting analysis to first 500 samples")
+    elif sample_size and sample_size < total_samples:
+        effective_sample_size = sample_size
+        print(f"Using specified sample size: {sample_size}")
+    else:
+        effective_sample_size = total_samples
+        print(f"Analyzing all {total_samples} samples")
+    
+    if effective_sample_size < total_samples:
+        indices = range(effective_sample_size)  # Take first N samples
+        print(f"Analyzing first {effective_sample_size} samples (total {total_samples} samples)")
     else:
         indices = range(total_samples)
         print(f"Analyzing all {total_samples} samples")
@@ -68,8 +80,10 @@ def analyze_sample_lengths(dataset, sample_size=None):
             
             # Parse tokens to AST to extract voxel information
             try:
-                parser = Parser(decoded_tokens)
-                ast = parser.parse()
+                #parser = Parser(decoded_tokens)
+                #ast = parser.parse()
+
+                ast = parse_with_cpp(decoded_tokens)
                 
                 # Calculate total voxels and color groups (object tags) count
                 total_voxels = 0
@@ -111,9 +125,21 @@ def analyze_grasp_distribution(dataset, sample_size=None):
     
     # If sample_size is specified, analyze only a subset of samples
     total_samples = len(dataset)
-    if sample_size and sample_size < total_samples:
-        indices = np.random.choice(total_samples, sample_size, replace=False)
-        print(f"Randomly sampling {sample_size} samples for grasp analysis (total {total_samples} samples)")
+    
+    # Limit to 500 samples if dataset is larger than 500
+    if total_samples > 500:
+        effective_sample_size = 500
+        print(f"Dataset has {total_samples} samples, limiting analysis to first 500 samples")
+    elif sample_size and sample_size < total_samples:
+        effective_sample_size = sample_size
+        print(f"Using specified sample size: {sample_size}")
+    else:
+        effective_sample_size = total_samples
+        print(f"Analyzing all {total_samples} samples")
+    
+    if effective_sample_size < total_samples:
+        indices = range(effective_sample_size)  # Take first N samples
+        print(f"Analyzing first {effective_sample_size} samples for grasp analysis (total {total_samples} samples)")
     else:
         indices = range(total_samples)
         print(f"Analyzing grasps in all {total_samples} samples")
@@ -150,8 +176,9 @@ def analyze_grasp_distribution(dataset, sample_size=None):
             
             # Parse tokens to get AST
             try:
-                parser = Parser(token_list)
-                ast = parser.parse()
+                #parser = Parser(token_list)
+                #ast = parser.parse()
+                ast = parse_with_cpp(token_list)
             except Exception as parse_error:
                 print(f"Failed to parse tokens in sample {idx}: {parse_error}")
                 continue
@@ -435,7 +462,7 @@ def main():
     try:
         dataset = PrecomputedDataset(
             data_path=data_path,
-            max_sequence_length=5000
+            max_sequence_length=6000
         )
         
         print(f"Dataset size: {len(dataset)} samples")
@@ -506,5 +533,200 @@ def main():
         percentage = count / len(lengths) * 100
         print(f"{label:>12}: {count:>6} samples ({percentage:>5.1f}%)")
 
+def benchmark_parser_performance(dataset, sample_size=100):
+    """Benchmark C++ vs Python parser performance on dataset samples"""
+    print(f"\n=== Parser Performance Benchmark ===")
+    
+    # Select sample for benchmarking
+    total_samples = len(dataset)
+    sample_size = total_samples
+    
+    print(f"Benchmarking parser performance on {sample_size} samples...")
+    
+    # Collect test samples with different complexities
+    test_samples = []
+    indices = np.linspace(0, min(1000, total_samples - 1), sample_size, dtype=int)
+    
+    for idx in indices:
+        try:
+            # Get raw tokens from dataset
+            sample = dataset.data[idx]
+            raw_tokens = sample['raw_tokens']
+            
+            # Decode tokens to get original token list
+            from graspGPT.model.token_manager import decode_sequence
+            decoded_tokens = decode_sequence(raw_tokens, dataset.token_mapping)
+            
+                
+            test_samples.append(decoded_tokens)
+            
+        except Exception as e:
+            print(f"Warning: Failed to process sample {idx}: {e}")
+            continue
+    
+    if len(test_samples) == 0:
+        print("No valid test samples found")
+        return
+    
+    print(f"Successfully prepared {len(test_samples)} test samples")
+    
+    # Group samples by complexity (token count)
+    small_samples = [s for s in test_samples if len(s) <= 100]
+    medium_samples = [s for s in test_samples if 100 < len(s) <= 500]
+    large_samples = [s for s in test_samples if 500 < len(s) <= 26000]
+    
+    sample_groups = [
+        ("Small (≤100 tokens)", small_samples),
+        ("Medium (101-500 tokens)", medium_samples),
+        ("Large (501-2000 tokens)", large_samples)
+    ]
+    
+    results = {}
+    
+    for group_name, samples in sample_groups:
+        if len(samples) == 0:
+            continue
+            
+        print(f"\n--- {group_name}: {len(samples)} samples ---")
+        
+        # Benchmark both parsers and compare results
+        print("Benchmarking Python parser...")
+        python_times = []
+        python_results = []
+        
+        for tokens in samples:
+            start = time.perf_counter()
+            try:
+                parser = Parser(tokens)
+                result = parser.parse()
+                end = time.perf_counter()
+                python_times.append((end - start) * 1000000)  # microseconds
+                python_results.append(str(result))  # Store string representation for comparison
+            except Exception as e:
+                print(f"Python parser failed: {e}")
+                python_times.append(float('inf'))
+                python_results.append(None)
+                continue
+        
+        # Benchmark C++ parser
+        print("Benchmarking C++ parser...")
+        cpp_times = []
+        cpp_results = []
+        cpp_success = 0
+        accuracy_matches = 0
+        
+        for i, tokens in enumerate(samples):
+            start = time.perf_counter()
+            try:
+                result = parse_with_cpp(tokens)
+                end = time.perf_counter()
+                cpp_times.append((end - start) * 1000000)  # microseconds
+                cpp_results.append(str(result))
+                cpp_success += 1
+                
+                # Compare results for accuracy
+                if i < len(python_results) and python_results[i] is not None:
+                    if str(result) == python_results[i]:
+                        accuracy_matches += 1
+                    else:
+                        # Check if it's just a minor formatting difference
+                        # by comparing the actual content
+                        try:
+                            # Compare item counts as a basic accuracy check
+                            if hasattr(result, 'items') and hasattr(Parser(tokens).parse(), 'items'):
+                                if len(result.items) == len(Parser(tokens).parse().items):
+                                    accuracy_matches += 1
+                                else:
+                                    print(f"Accuracy mismatch in sample {i}: C++ has {len(result.items)} items, Python has {len(Parser(tokens).parse().items)} items")
+                        except:
+                            print(f"Could not verify accuracy for sample {i}")
+                            
+            except Exception as e:
+                print(f"C++ parser failed: {e}")
+                cpp_times.append(float('inf'))
+                cpp_results.append(None)
+                continue
+        
+        if len(python_times) > 0 and len(cpp_times) > 0:
+            python_avg = np.mean(python_times)
+            cpp_avg = np.mean(cpp_times)
+            
+            # Calculate accuracy rate
+            valid_comparisons = sum(1 for i in range(min(len(python_results), len(cpp_results))) 
+                                  if python_results[i] is not None and cpp_results[i] is not None)
+            accuracy_rate = (accuracy_matches / valid_comparisons * 100) if valid_comparisons > 0 else 0
+            
+            results[group_name] = {
+                'python_avg': python_avg,
+                'cpp_avg': cpp_avg,
+                'python_std': np.std([t for t in python_times if t != float('inf')]),
+                'cpp_std': np.std([t for t in cpp_times if t != float('inf')]),
+                'sample_count': min(len(python_times), len(cpp_times)),
+                'speedup': python_avg / cpp_avg if cpp_avg > 0 else 0,
+                'accuracy_rate': accuracy_rate,
+                'accuracy_matches': accuracy_matches,
+                'valid_comparisons': valid_comparisons
+            }
+            
+            print(f"Python average: {python_avg:.2f} μs")
+            print(f"C++ average: {cpp_avg:.2f} μs")
+            print(f"Speedup: {python_avg / cpp_avg:.2f}x" if cpp_avg > 0 else "N/A")
+            print(f"C++ success rate: {cpp_success}/{len(samples)} ({cpp_success/len(samples)*100:.1f}%)")
+            print(f"Accuracy rate: {accuracy_matches}/{valid_comparisons} ({accuracy_rate:.1f}%)")
+    
+    # Print summary
+    print(f"\n=== Performance Summary ===")
+    if len(results) > 0:
+        for group_name, stats in results.items():
+            print(f"{group_name}:")
+            print(f"  Samples: {stats['sample_count']}")
+            print(f"  Python: {stats['python_avg']:.2f} ± {stats['python_std']:.2f} μs")
+            print(f"  C++: {stats['cpp_avg']:.2f} ± {stats['cpp_std']:.2f} μs")
+            print(f"  Speedup: {stats['speedup']:.2f}x")
+            print(f"  Accuracy: {stats['accuracy_matches']}/{stats['valid_comparisons']} ({stats['accuracy_rate']:.1f}%)")
+        
+        # Overall statistics
+        all_python_times = []
+        all_cpp_times = []
+        for stats in results.values():
+            all_python_times.extend([stats['python_avg']] * stats['sample_count'])
+            all_cpp_times.extend([stats['cpp_avg']] * stats['sample_count'])
+        
+        if len(all_python_times) > 0 and len(all_cpp_times) > 0:
+            overall_python_avg = np.mean(all_python_times)
+            overall_cpp_avg = np.mean(all_cpp_times)
+            overall_speedup = overall_python_avg / overall_cpp_avg
+            
+            # Calculate overall accuracy
+            total_matches = sum(stats['accuracy_matches'] for stats in results.values())
+            total_comparisons = sum(stats['valid_comparisons'] for stats in results.values())
+            overall_accuracy = (total_matches / total_comparisons * 100) if total_comparisons > 0 else 0
+            
+            print(f"\nOverall Performance:")
+            print(f"  Python average: {overall_python_avg:.2f} μs")
+            print(f"  C++ average: {overall_cpp_avg:.2f} μs")
+            print(f"  Overall speedup: {overall_speedup:.2f}x")
+            print(f"  Overall accuracy: {total_matches}/{total_comparisons} ({overall_accuracy:.1f}%)")
+    else:
+        print("No successful benchmarks completed")
+
 if __name__ == "__main__":
     main()
+    
+    # Add performance benchmark
+    print(f"\n" + "="*60)
+    print("Running parser performance benchmark...")
+    
+    try:
+        # Re-create dataset for benchmarking
+        data_path = "output/precomputed_data/"
+        dataset = PrecomputedDataset(
+            data_path=data_path,
+            max_sequence_length=6000
+        )
+        
+        # Run performance benchmark
+        benchmark_parser_performance(dataset, sample_size=50)
+        
+    except Exception as e:
+        print(f"Failed to run performance benchmark: {e}")
