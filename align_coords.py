@@ -16,7 +16,7 @@ import random
 # Import GraspGPT modules
 try:
     from graspGPT.model.token_manager import get_token_manager
-    from graspGPT.model.parser_and_serializer import Serializer, Seq, SB, CB
+    from graspGPT.model.parser_and_serializer import Serializer, Seq, Scene, SB, CB
 except ImportError:
     print("Warning: Could not import GraspGPT modules. Sequence conversion will be skipped.")
 
@@ -458,8 +458,9 @@ def convert_data_list_to_sequence(data_list: List[Tuple], volume_dims: Tuple[int
             sb = SB(tag=shape_tag, cbs=cbs)
             sbs.append(sb)
         
-        # Step 2: Create sequence with all SBs from this sample
-        seq = Seq(items=sbs)
+        # Step 2: Create sequence with Scene node wrapping SBs
+        scene = Scene(sbs=sbs)
+        seq = Seq(items=[scene])
         
         # Step 3: Serialize AST to flat token list
         flat_tokens = Serializer.serialize(seq)

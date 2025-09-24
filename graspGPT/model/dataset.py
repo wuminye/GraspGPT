@@ -19,14 +19,14 @@ from process_grasp import loadGraspLabels, process_grasp_data, gripper_params_to
 
 try:
     from .token_manager import get_token_manager
-    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+    from .parser_and_serializer import Serializer, Seq, SB, Scene, CB, GRASP, GB
 except ImportError:
     try:
         from token_manager import get_token_manager
-        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+        from parser_and_serializer import Serializer, Seq, SB, Scene, CB, GRASP, GB
     except ImportError:
         from minGPT.token_manager import get_token_manager
-        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB
+        from minGPT.parser_and_serializer import Serializer, Seq, SB, Scene, CB, GRASP, GB
 
 class VoxelDataset(Dataset):
     """
@@ -161,8 +161,9 @@ class VoxelDataset(Dataset):
                 sb = SB(tag=shape_tag, cbs=cbs)
                 sbs.append(sb)
             
-            # Step 2: Create sequence with all SBs from this sample
-            seq = Seq(items=sbs)
+            # Step 2: Wrap SBs into a Scene node and build sequence
+            scene = Scene(sbs=sbs)
+            seq = Seq(items=[scene])
             
             # Step 3: Serialize AST to flat token list
             flat_tokens = Serializer.serialize(seq)
@@ -253,7 +254,8 @@ class VoxelDataset(Dataset):
         tokens = torch.tensor(token_sequence, dtype=torch.long)
         grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
 
-        tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
+
+        tokens = torch.cat([tokens[:-1], grasp_token[1:]], dim=0)  # Concatenate along sequence dimension
 
         return tokens
     
@@ -322,10 +324,12 @@ class VoxelDataset(Dataset):
             token_sequence = [[token] for token in token_sequence]
 
         
+        
         tokens = torch.tensor(token_sequence, dtype=torch.long)
         grasp_token = torch.tensor(grasp_token_ids, dtype=torch.long).unsqueeze(1)  # Shape [num_grasps, 1]
 
-        tokens = torch.cat([tokens[:-1], grasp_token], dim=0)  # Concatenate along sequence dimension
+        tokens = torch.cat([tokens[:-1], grasp_token[1:]], dim=0)  # Concatenate along sequence dimension
+        
         
         # Handle sequence length
         seq_len = tokens.shape[0]
@@ -877,10 +881,12 @@ class VoxelDataset(Dataset):
         Returns:
             Seq: Sequence containing GRASP item following the grammar
         """
+        scene_node = Scene(sbs=[])
+
         if not scene_grasps or not valid_grasp_parampc:
-            # Return empty GRASP sequence
+            # Return sequence with empty scene and empty GRASP block
             empty_grasp = GRASP(gbs=[])
-            return Seq(items=[empty_grasp])
+            return Seq(items=[scene_node, empty_grasp])
         
         # Create GB blocks for each object with grasps
         gb_blocks = []
@@ -928,8 +934,8 @@ class VoxelDataset(Dataset):
         # Create GRASP item with all GB blocks
         grasp_item = GRASP(gbs=gb_blocks)
         
-        # Return sequence with the GRASP item
-        return Seq(items=[grasp_item])
+        # Return sequence with the Scene and GRASP item
+        return Seq(items=[scene_node, grasp_item])
 
     def convert_scene_grasps_to_tokens(self, scene_grasps: Dict[int, List], valid_grasp_parampc: Dict[int, List]) -> List[int]:
         """

@@ -19,7 +19,7 @@ sys.path.append(str(project_root))
 # Import required modules
 from graspGPT.model.dataset import VoxelDataset
 from graspGPT.model.precomputed_dataset import PrecomputedDataset
-from graspGPT.model.parser_and_serializer import Parser, GRASP, SB, parse_with_cpp
+from graspGPT.model.parser_and_serializer import Parser, GRASP, SB, Scene, parse_with_cpp
 
 def analyze_sample_lengths(dataset, sample_size=None):
     """Analyze sample length distribution"""
@@ -91,10 +91,12 @@ def analyze_sample_lengths(dataset, sample_size=None):
                 
                 # Count voxels and object tags from SB items
                 for item in ast.items:
-                    if isinstance(item, SB):
-                        # Count coordinate blocks (CBs) as voxels
+                    if isinstance(item, Scene):
+                        for sb in item.sbs:
+                            total_voxels += len(sb.cbs)
+                            color_groups.add(sb.tag)
+                    elif isinstance(item, SB):
                         total_voxels += len(item.cbs)
-                        # Add object tag as color group equivalent
                         color_groups.add(item.tag)
                 
                 num_color_groups = len(color_groups)
@@ -190,7 +192,10 @@ def analyze_grasp_distribution(dataset, sample_size=None):
             
             # Traverse AST to find all objects and grasps
             for item in ast.items:
-                if isinstance(item, SB):  # Labeled segment - object present in scene
+                if isinstance(item, Scene):
+                    for sb in item.sbs:
+                        sample_objects_present.add(sb.tag)
+                elif isinstance(item, SB):  # Fallback for bare SB nodes
                     sample_objects_present.add(item.tag)
                 elif isinstance(item, GRASP):  # Grasp actions
                     for gb in item.gbs:  # Each GB represents one grasp

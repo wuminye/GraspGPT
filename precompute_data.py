@@ -16,7 +16,7 @@ sys.path.append(str(project_root))
 # 导入所需模块
 from graspGPT.model.dataset import VoxelDataset
 from graspGPT.model.core import save_voxels
-from graspGPT.model.token_manager import get_token_manager
+from graspGPT.model.token_manager import get_token_manager, encode_sequence
 
 
 Repeat_times = 1
@@ -51,6 +51,7 @@ def process_single_ind(ind):
     results = []
     for j in range(Repeat_times):
         tokens = global_dataset.prepare_data(ind)
+
         tokens = tokens.squeeze().tolist()
 
 

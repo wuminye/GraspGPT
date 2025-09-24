@@ -13,16 +13,29 @@ import os
 import argparse
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from collections import defaultdict
 from itertools import permutations
 
 import open3d as o3d
 
+
 # 导入必要的模块
 try:
     from graspGPT.model.precomputed_dataset import PrecomputedDataset
-    from graspGPT.model.token_manager import get_token_manager, decode_sequence
-    from graspGPT.model.parser_and_serializer import Parser, Serializer, Seq, SB, GRASP, parse_with_cpp
+    from graspGPT.model.token_manager import get_token_manager, decode_sequence, encode_sequence
+    from graspGPT.model.parser_and_serializer import (
+        Parser,
+        Serializer,
+        Seq,
+        Scene,
+        SB,
+        UNSEG,
+        AMODAL,
+        GRASP,
+        parse_with_cpp,
+    )
     from blender.process_grasp import interior_points_to_gripper_params, Grasp
+    from graspGPT.model.core import generate_amodal_sequence
 except ImportError:
     print("Warning: 无法导入graspGPT模块，请确保在正确的环境中运行")
     import sys
@@ -104,7 +117,10 @@ def tokens_ids_to_sequence(token_ids: List[int], token_mapping: Dict) -> Seq:
         decoded_tokens = decode_sequence(token_ids, token_mapping)
         print(f"解码得到的tokens数量: {len(decoded_tokens)}")
         print(f"前10个tokens: {decoded_tokens[:10] if len(decoded_tokens) > 10 else decoded_tokens}")
-        
+
+
+       
+
         # 使用parser解析tokens为AST
         #parser = Parser(decoded_tokens)
         #seq = parser.parse()
@@ -119,75 +135,66 @@ def tokens_ids_to_sequence(token_ids: List[int], token_mapping: Dict) -> Seq:
         # 返回空序列
         return Seq([])
 
-def extract_sb_pointclouds(seq: Seq, volume_dims: Tuple[int, int, int], 
-                          bbox_min: np.ndarray, voxel_size: float) -> Dict[str, np.ndarray]:
-    """
-    从序列中提取SB点云
-    
-    Args:
-        seq: 解析后的序列
-        volume_dims: 体素维度
-        bbox_min: 边界框最小坐标
-        voxel_size: 体素大小
-        
-    Returns:
-        Dict[str, np.ndarray]: 标签到点云的映射
-    """
-    sb_clouds = {}
-    
-    for item in seq.items:
-        if isinstance(item, SB):
-            # 收集该SB的所有坐标
-            print(f"Processing SB with tag: {item.tag}, number of CBs: {len(item.cbs)}")
-            coords = []
-            for cb in item.cbs:
-                coords.append(cb.coord)
-            
-            if coords:
-                # 转换体素坐标到世界坐标
-                coords_array = np.array(coords)
-                # 体素坐标转换为实际坐标
-                real_coords = coords_array * voxel_size + bbox_min
-                sb_clouds[item.tag] = real_coords
-                print(f"SB '{item.tag}': {len(coords)} 个点")
-    
-    return sb_clouds
+def _cbs_to_world(cbs: List, bbox_min: np.ndarray, voxel_size: float) -> np.ndarray:
+    """将CB列表中的体素坐标转换为世界坐标数组。"""
+    coords = [cb.coord for cb in cbs if cb.coord is not None]
+    if not coords:
+        return np.empty((0, 3), dtype=np.float32)
+    coords_array = np.asarray(coords, dtype=np.float32)
+    return coords_array * voxel_size + bbox_min
 
-def extract_grasp_pointclouds(seq: Seq, volume_dims: Tuple[int, int, int], 
-                             bbox_min: np.ndarray, voxel_size: float) -> Dict[str, List[np.ndarray]]:
-    """
-    从序列中提取GRASP点云
-    
-    Args:
-        seq: 解析后的序列
-        volume_dims: 体素维度
-        bbox_min: 边界框最小坐标
-        voxel_size: 体素大小
-        
-    Returns:
-        Dict[str, List[np.ndarray]]: 标签到抓取点云列表的映射
-    """
-    grasp_clouds = {}
-    
+
+def extract_pointclouds_by_category(
+    seq: Seq,
+    bbox_min: np.ndarray,
+    voxel_size: float,
+) -> Tuple[
+    Dict[str, List[np.ndarray]],
+    Dict[str, List[np.ndarray]],
+    Dict[str, List[np.ndarray]],
+    Dict[str, List[np.ndarray]],
+]:
+    """一次遍历序列，按语法类别收集点云。"""
+
+    scene_clouds: Dict[str, List[np.ndarray]] = defaultdict(list)
+    amodal_clouds: Dict[str, List[np.ndarray]] = defaultdict(list)
+    unseg_clouds: Dict[str, List[np.ndarray]] = defaultdict(list)
+    grasp_clouds: Dict[str, List[np.ndarray]] = defaultdict(list)
+
     for item in seq.items:
-        if isinstance(item, GRASP):
+        if isinstance(item, Scene):
+            for sb in item.sbs:
+                points = _cbs_to_world(sb.cbs, bbox_min, voxel_size)
+                if len(points):
+                    scene_clouds[sb.tag].append(points)
+                    print(f"Scene SB '{sb.tag}': {len(points)} 个点")
+        elif isinstance(item, SB):
+            points = _cbs_to_world(item.cbs, bbox_min, voxel_size)
+            if len(points):
+                scene_clouds[item.tag].append(points)
+                print(f"Scene SB '{item.tag}': {len(points)} 个点")
+
+        elif isinstance(item, AMODAL):
+            points = _cbs_to_world(item.sb.cbs, bbox_min, voxel_size)
+            if len(points):
+                amodal_clouds[item.sb.tag].append(points)
+                print(f"Amodal SB '{item.sb.tag}': {len(points)} 个点")
+
+        elif isinstance(item, UNSEG):
+            for sb in item.sbs:
+                points = _cbs_to_world(sb.cbs, bbox_min, voxel_size)
+                if len(points):
+                    unseg_clouds[sb.tag].append(points)
+                    print(f"Unseg SB '{sb.tag}': {len(points)} 个点")
+
+        elif isinstance(item, GRASP):
             for gb in item.gbs:
-                if gb.tag not in grasp_clouds:
-                    grasp_clouds[gb.tag] = []
-                
-                # 收集该GB的所有坐标
-                coords = []
-                for cb in gb.cbs:
-                    coords.append(cb.coord)
-                
-                if coords:
-                    # 转换体素坐标到世界坐标
-                    coords_array = np.array(coords)
-                    real_coords = coords_array * voxel_size + bbox_min
-                    grasp_clouds[gb.tag].append(real_coords)
-                    print(f"GRASP '{gb.tag}': {len(coords)} 个点")
-    
-    return grasp_clouds
+                points = _cbs_to_world(gb.cbs, bbox_min, voxel_size)
+                if len(points):
+                    grasp_clouds[gb.tag].append(points)
+                    print(f"GRASP '{gb.tag}': {len(points)} 个点")
+
+    return scene_clouds, amodal_clouds, unseg_clouds, grasp_clouds
 
 def generate_colors_for_object(tag: str, num_points: int) -> np.ndarray:
     """
@@ -331,6 +338,8 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     # 获取样本
     tokens, max_seq_len, _ = dataset[sample_idx]
 
+    
+
     print(f"Tokens shape: {tokens.shape}")
     print(f"Max sequence length: {max_seq_len}")
 
@@ -340,7 +349,13 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     voxel_size = dataset.voxel_size
     
     print(f"体素信息: dims={volume_dims}, bbox_min={bbox_min}, voxel_size={voxel_size}")
+
+
+    decoded_tokens = decode_sequence(tokens.squeeze().numpy(), dataset.token_mapping)
     
+    tokens = generate_amodal_sequence(decoded_tokens, voxel_dims=(volume_dims[0], volume_dims[1], volume_dims[2]))
+    tokens = encode_sequence(tokens, dataset.token_mapping)
+
     # 创建输出目录
     sample_dir = Path(output_dir) / f"sample_{sample_idx}"
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -372,16 +387,19 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
         output_dir: 输出目录
     """
     print("=== 开始可视化tokens ===")
-    
+
+ 
     # 转换token ids到序列
     print("正在转换token ids到序列...")
     if hasattr(tokens, 'flatten'):
         token_ids = tokens.flatten().tolist() if tokens.dim() > 1 else tokens.tolist()
     else:
         token_ids = tokens if isinstance(tokens, list) else list(tokens)
+
     
     seq = tokens_ids_to_sequence(token_ids, token_mapping)
-    
+
+
     print(f"体素信息: dims={volume_dims}, bbox_min={bbox_min}, voxel_size={voxel_size}")
     
     # 创建输出目录
@@ -398,62 +416,46 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
         f.write("Parsed Sequence:\n")
         f.write(str(seq))
     
-    # 提取并保存SB点云
-    print("正在提取SB点云...")
-    sb_clouds = extract_sb_pointclouds(seq, volume_dims, bbox_min, voxel_size)
-    
-    # 保存单独的SB点云
-    for tag, points in sb_clouds.items():
-        colors = generate_colors_for_object(tag, len(points))
-        filename = output_path / f"sb_{tag}.ply"
-        save_pointcloud_as_ply(points, str(filename), colors)
-    
-    # 合并所有SB点云
-    all_sb_points = []
-    all_sb_colors = []
-    for tag, points in sb_clouds.items():
-        if len(points) > 0:
-            all_sb_points.append(points)
-            colors = generate_colors_for_object(tag, len(points))
-            all_sb_colors.append(colors)
-    
-    if all_sb_points:
-        merged_sb_points = np.vstack(all_sb_points)
-        merged_sb_colors = np.vstack(all_sb_colors)
-        filename = output_path / "merged_all_sb.ply"
-        save_pointcloud_as_ply(merged_sb_points, str(filename), merged_sb_colors)
-        print(f"合并所有SB点云: {len(merged_sb_points)} 个点")
-    
-    # 提取并保存GRASP点云
-    print("正在提取GRASP点云...")
-    grasp_clouds = extract_grasp_pointclouds(seq, volume_dims, bbox_min, voxel_size)
-    
-    # 保存单独的GRASP点云
-    for tag, grasp_list in grasp_clouds.items():
-        for i, points in enumerate(grasp_list):
-            # 为抓取点云使用不同的颜色（更亮的颜色）
-            colors = generate_colors_for_object(tag, len(points))
-            colors = np.minimum(colors * 1.5, 255).astype(np.uint8)  # 增加亮度
-            filename = output_path / f"grasp_{tag}_{i}.ply"
-            save_pointcloud_as_ply(points, str(filename), colors)
-    
-    # 合并所有GRASP点云
-    all_grasp_points = []
-    all_grasp_colors = []
-    for tag, grasp_list in grasp_clouds.items():
-        for points in grasp_list:
-            if len(points) > 0:
-                all_grasp_points.append(points)
-                colors = generate_colors_for_object(tag, len(points))
-                colors = np.minimum(colors * 1.5, 255).astype(np.uint8)  # 增加亮度
-                all_grasp_colors.append(colors)
+    print("正在按类别提取点云...")
+    scene_clouds, amodal_clouds, unseg_clouds, grasp_clouds = extract_pointclouds_by_category(
+        seq, bbox_min, voxel_size
+    )
 
-    if all_grasp_points:
-        merged_grasp_points = np.vstack(all_grasp_points)
-        merged_grasp_colors = np.vstack(all_grasp_colors)
-        filename = output_path / "merged_all_grasp.ply"
-        save_pointcloud_as_ply(merged_grasp_points, str(filename), merged_grasp_colors)
-        print(f"合并所有GRASP点云: {len(merged_grasp_points)} 个点")
+    def save_category(category: str, clouds: Dict[str, List[np.ndarray]], brightness_scale: float = 1.0) -> None:
+        category_dir = output_path / category
+        category_dir.mkdir(parents=True, exist_ok=True)
+
+        merged_points: List[np.ndarray] = []
+        merged_colors: List[np.ndarray] = []
+
+        for tag, point_groups in clouds.items():
+            for idx, points in enumerate(point_groups):
+                if len(points) == 0:
+                    continue
+                colors = generate_colors_for_object(tag, len(points))
+                if brightness_scale != 1.0:
+                    colors = np.clip(colors * brightness_scale, 0, 255).astype(np.uint8)
+
+                suffix = f"_{idx}" if idx > 0 else ""
+                filename = category_dir / f"{tag}{suffix}.ply"
+                save_pointcloud_as_ply(points, str(filename), colors)
+
+                merged_points.append(points)
+                merged_colors.append(colors)
+
+        if merged_points:
+            merged_points_arr = np.vstack(merged_points)
+            merged_colors_arr = np.vstack(merged_colors)
+            merged_name = category_dir / f"merged_{category}.ply"
+            save_pointcloud_as_ply(merged_points_arr, str(merged_name), merged_colors_arr)
+            print(f"合并{category}点云: {len(merged_points_arr)} 个点")
+        else:
+            print(f"{category} 类别没有点云")
+
+    save_category("scene", scene_clouds)
+    save_category("amodal", amodal_clouds)
+    save_category("unseg", unseg_clouds)
+    save_category("grasp", grasp_clouds, brightness_scale=1.5)
 
     grasp_mesh_dir = output_path / "grasp_meshes"
     grasp_mesh_dir.mkdir(parents=True, exist_ok=True)

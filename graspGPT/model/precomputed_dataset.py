@@ -13,14 +13,14 @@ import random
 
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
-    from .parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
 except ImportError:
     try:
         from token_manager import get_token_manager, decode_sequence, encode_sequence
-        from parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
+        from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
     except ImportError:
         from minGPT.token_manager import get_token_manager, decode_sequence, encode_sequence
-        from minGPT.parser_and_serializer import Serializer, Seq, SB, CB, GRASP, GB, Parser, parse_with_cpp
+        from minGPT.parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
 
 
 class PrecomputedDataset(Dataset):
@@ -158,8 +158,9 @@ class PrecomputedDataset(Dataset):
                 sb = SB(tag=shape_tag, cbs=cbs)
                 sbs.append(sb)
             
-            # Step 2: Create sequence with all SBs from this sample
-            seq = Seq(items=sbs)
+            # Step 2: Wrap SBs into a Scene node and build sequence
+            scene = Scene(sbs=sbs)
+            seq = Seq(items=[scene])
             
             # Step 3: Serialize AST to flat token list
             flat_tokens = Serializer.serialize(seq)
@@ -209,9 +210,13 @@ class PrecomputedDataset(Dataset):
             sb_tags = set()
             sb_list = []
             for item in ast.items:
-                if isinstance(item, SB):
-                    sb_tags.add(item.tag)
+                if isinstance(item, Scene):
+                    sb_list.extend(item.sbs)
+                elif isinstance(item, SB):
                     sb_list.append(item)
+
+            for sb in sb_list:
+                sb_tags.add(sb.tag)
             
 
             random.shuffle(sb_list)
@@ -237,12 +242,13 @@ class PrecomputedDataset(Dataset):
                     item.gbs = filtered_gbs
                     grasp_block = item
             
+            items = []
+            items.append(Scene(sbs=sb_list))
             if grasp_block is not None:
-                sb_list.append(grasp_block)
-
+                items.append(grasp_block)
 
             # Step 4: 序列化AST回tokens
-            filtered_tokens = Serializer.serialize(Seq(items=sb_list))
+            filtered_tokens = Serializer.serialize(Seq(items=items))
             return filtered_tokens
             
         except Exception as e:
@@ -265,6 +271,10 @@ class PrecomputedDataset(Dataset):
             tokens = tokens.tolist()
 
         tokens = decode_sequence(tokens, self.token_mapping)
+
+    
+    
+    
 
         tokens = self.filter_grasp_tokens(tokens)
 

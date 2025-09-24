@@ -8,43 +8,36 @@ from __future__ import annotations
 #   - 单引号括起的为字面量终结符
 #   - 全大写小写混排的名字（COORD、SERIAL 等）为“词法 token”
 #     —— 由词法分析器直接返回，语法层不再拆分
-#
-# 顶层结构：零个或多个 ITEM，最后以字面量 'end' 结束
 # ---------------------------------------------------------------------------
 
-SEQ    → ITEM* 'end'                       # ← 入口规则
 
-ITEM   → SB | UNSEG | INPAINT | AMODAL | GRASP              # ITEM 五种形态
+SEQ   → SCENE  [AMODAL] [UNSEG] [GRASP]  'end'             # ← 入口规则,   [AMODAL]，[UNSEG] 和 [GRASP] 可能出现也可能不出现，一旦出现一定保持这个顺序
+
+
+# ==== SCENE ==== 描述场景的内容
+SCENE  → 'scene' SB*                # SCENE 由 0⁺ SB 组成
 
 # —— Labeled segment ---------------------------------------------------------
 SB     → TAG CB+                           # TAG 后至少一个坐标块
 
-# —— Grasp data ---------------------------------------------------------
+# —— Grasp data ------------ 预测对于当前场景，能从哪些位置抓取哪些物体
 GRASP  → 'detectgrasp' GB*                # 'detectgrasp' 后 0⁺ GB
 GB  -> 'grasp' TAG CB+                    # 'grasp' + TAG + 1⁺ CB
 
-# —— Un‑labeled segment ----------------------------------------
-UNSEG  → 'unlabel' CB*                    # 开始：可带 0⁺ 坐标块
-          'segment' SB*                    # 中段：可嵌 0⁺ SB
-          'endunseg'                       # 结束
-
-# —— Shape Inpainting ----------------------------------------
-INPAINT  → 'fragment' CB*                    # 开始：可带 0⁺ 坐标块
-          'inpaint' SB*                    # 中段：可嵌 0⁺ SB, 最多1个SB
-          'endinpaint'                       # 结束
+# —— Un‑labeled segment --------讲场景中未标注的部分分割出来，将SCENE和AMODAL中标记为 'unlabel' 的SB 分割后对应输出，输出的SB中 TAG 只能是  'object' INT 
+UNSEG  →  'segment' SB*  'endunseg'     # 可嵌 0⁺ SB, 不能出现TAG 为 'unknow' | 'unlabel' |   'incomplete' 的SB
 
 
-# —— Amodal Prediction ----------------------------------------
-AMODAL  → 'tagfragment' SB*                    # 开始：可带 0⁺ SB
-          'amodal' SB*                    # 中段：可嵌 0⁺ SB, 最多1个SB
-          'endamodal'                       # 结束
+# —— Amodal Prediction ---------- 一些物体因为视角遮挡的原因没看全，需要用这个把场景中的物体补全， 将SCENE中 标记为'incomplete' 的SB补全。
+AMODAL  → 'amodal' SB   'endamodal'     # 只有一个 TAG 为 'unlabel' 的 SB
+                           
 
 # —— 坐标块 ——----------------------------------------------------------------
 CB     → COORD                             # 单坐标
         | COORD SERIAL                     # 或坐标 + 序列标签
 
 # —— 终结符组 ——--------------------------------------------------------------
-TAG    → 'unknow'  | 'object' INT            # 形状关键字
+TAG    → 'unknow' | 'unlabel' |   'incomplete'   | 'object' INT            # 形状关键字
 
 # 其余终结符：COORD、SERIAL 在词法层直接产生
 
@@ -52,7 +45,7 @@ TAG    → 'unknow'  | 'object' INT            # 形状关键字
 # 词法记号（由词法层生成，非 CFG 一部分）
 # ---------------------------------------------------------------------------
 
-COORD  → '(' INT ',' INT ')'               # 行、列元组 (row,col)
+COORD  → '(' INT ',' INT ',' INT ')'               # 三元组 (x,y,z)，均为非负整数 代表三维坐标
 
 SERIAL → '<serial' INT '>'
                                           # 合法序列长度：1-240
@@ -69,8 +62,7 @@ Input is a *flat* Python list where each token is either
     * a 3‑tuple of ints representing a 3D coordinate, e.g. (12, 34, 56).
 
 The parser produces a small Abstract Syntax Tree (AST) composed of
-`Seq`, `SB`, `UNSEG`, `GRASP`, `GB`, and `CB` nodes.  See the `__main__` section at
-the bottom for a runnable demo.
+`Seq`, `SB`, `UNSEG`, `AMODAL`, `GRASP`, `GB`, and `CB` nodes. 
 """
 
 
@@ -137,36 +129,29 @@ class SB:
 
 
 @dataclass
-class UNSEG:
-    cbs: List[CB]
+class Scene:
     sbs: List[SB]
 
     def __str__(self) -> str:
-        cbs_str = ", ".join(map(str, self.cbs))
-        sbs_str = ", ".join(map(str, self.sbs))
-        return f"UNSEG(cbs=[{cbs_str}], sbs=[{sbs_str}])"
+        inner = ", ".join(map(str, self.sbs))
+        return f"Scene([{inner}])"
 
 
 @dataclass
-class INPAINT:
-    cbs: List[CB]
-    sb: Optional[SB] = None  # 只允许0或1个SB
+class UNSEG:
+    sbs: List[SB]
 
     def __str__(self) -> str:
-        cbs_str = ", ".join(map(str, self.cbs))
-        sb_str = str(self.sb) if self.sb else ""
-        return f"INPAINT(cbs=[{cbs_str}], sb={sb_str})"
+        sbs_str = ", ".join(map(str, self.sbs))
+        return f"UNSEG(sbs=[{sbs_str}])"
 
 
 @dataclass
 class AMODAL:
-    fragment_sbs: List[SB]  # 'tagfragment' 后的SB列表
-    amodal_sbs: List[SB]    # 'amodal' 后的SB列表
+    sb: SB
 
     def __str__(self) -> str:
-        fragment_str = ", ".join(map(str, self.fragment_sbs))
-        amodal_str = ", ".join(map(str, self.amodal_sbs))
-        return f"AMODAL(fragment_sbs=[{fragment_str}], amodal_sbs=[{amodal_str}])"
+        return f"AMODAL({self.sb})"
 
 
 @dataclass
@@ -180,7 +165,7 @@ class GRASP:
 
 @dataclass
 class Seq:
-    items: List[Union[SB, UNSEG, INPAINT, AMODAL, GRASP]]
+    items: List[Union[Scene, UNSEG, AMODAL, GRASP]]
 
     def __str__(self) -> str:
         joined = ",\n  ".join(map(str, self.items))
@@ -222,34 +207,48 @@ class Parser:
         """Parse a SEQ and ensure the final token is 'end'.
         如果解析过程中遇到 ParseError，则忽略后续 token，只用之前成功解析的数据构造合法 AST。
         """
-        items: List[Union[SB, UNSEG, INPAINT, AMODAL, GRASP]] = []
-        while self.current() not in (None, 'end'):
-            try:
-                items.append(self._parse_item())
-            except ParseError as e:
-                # 出错后，忽略后续 token，直接跳出循环
-                print(f"ParseError: {e}")
-                break
-        # 无论是否出错，都尝试 consume 掉 'end'，保证 tree 合法
+        items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = []
+        try:
+            scene = self._parse_scene()
+            items.append(scene)
+
+            # Optional AMODAL
+            if self.current() == 'amodal':
+                items.append(self._parse_amodal())
+
+            # Optional UNSEG
+            if self.current() == 'segment':
+                items.append(self._parse_unseg())
+
+            # Optional GRASP
+            if self.current() == 'detectgrasp':
+                items.append(self._parse_grasp())
+
+            # After optional sections we should see 'end' or EOF
+            trailing = self.current()
+            if trailing not in (None, 'end'):
+                raise ParseError(
+                    f"Unexpected token {trailing!r} after parsing SEQ at position {self.pos}"
+                )
+
+        except ParseError as e:
+            print(f"ParseError: {e}")
+            self._consume_until_end()
+
+        # Always consume a terminal 'end' if present
         if self.current() == 'end':
             self.advance()
         return Seq(items)
 
-    # ITEM ------------------------------------------------------------------
-    def _parse_item(self) -> Union[SB, UNSEG, INPAINT, AMODAL, GRASP]:
-        tok = self.current()
-        # 检查是否是形状标签（包括基础标签和动态标签）
-        if tok in get_token_manager().shape_tags:
-            return self._parse_sb()
-        if tok == 'unlabel':
-            return self._parse_unseg()
-        if tok == 'fragment':
-            return self._parse_inpaint()
-        if tok == 'tagfragment':
-            return self._parse_amodal()
-        if tok == 'detectgrasp':
-            return self._parse_grasp()
-        raise ParseError(f"[parse_item] Unexpected token {tok!r} at position {self.pos}")
+    def _parse_scene(self) -> Scene:
+        if self.current() == 'scene':
+            self.advance()
+        else:
+            print("Warning: Missing 'scene' token at sequence start, parsing legacy format.")
+        sbs: List[SB] = []
+        while self.current() in get_token_manager().shape_tags:
+            sbs.append(self._parse_sb())
+        return Scene(sbs)
 
     # SB --------------------------------------------------------------------
     def _parse_sb(self) -> SB:
@@ -264,45 +263,24 @@ class Parser:
 
     # UNSEG -----------------------------------------------------------------
     def _parse_unseg(self) -> UNSEG:
-        self.expect('unlabel')
-        cbs: List[CB] = []
-        while self._starts_cb(self.current()):
-            cbs.append(self._parse_cb())
         self.expect('segment')
         sbs: List[SB] = []
         while self.current() in get_token_manager().shape_tags:
-            sbs.append(self._parse_sb())
-        self.expect('endunseg')
-        return UNSEG(cbs, sbs)
-
-    # INPAINT -----------------------------------------------------------------
-    def _parse_inpaint(self) -> INPAINT:
-        self.expect('fragment')
-        cbs: List[CB] = []
-        while self._starts_cb(self.current()):
-            cbs.append(self._parse_cb())
-        self.expect('inpaint')
-        sb: Optional[SB] = None
-        if self.current() in get_token_manager().shape_tags:
             sb = self._parse_sb()
-            # 检查是否还有多余的SB
-            if self.current() in get_token_manager().shape_tags:
-                raise ParseError("INPAINT最多只能有1个SB")
-        self.expect('endinpaint')
-        return INPAINT(cbs, sb)
+            if not self._is_object_tag(sb.tag):
+                raise ParseError("UNSEG 内部的 SB 标签必须为 'object' + INT")
+            sbs.append(sb)
+        self.expect('endunseg')
+        return UNSEG(sbs)
 
     # AMODAL -----------------------------------------------------------------
     def _parse_amodal(self) -> AMODAL:
-        self.expect('tagfragment')
-        fragment_sbs: List[SB] = []
-        while self.current() in get_token_manager().shape_tags:
-            fragment_sbs.append(self._parse_sb())
         self.expect('amodal')
-        amodal_sbs: List[SB] = []
-        while self.current() in get_token_manager().shape_tags:
-            amodal_sbs.append(self._parse_sb())
+        sb = self._parse_sb()
+        if sb.tag != 'unlabel':
+            raise ParseError("AMODAL 中的 SB 必须使用 'unlabel' 标签")
         self.expect('endamodal')
-        return AMODAL(fragment_sbs, amodal_sbs)
+        return AMODAL(sb)
 
     # GRASP -----------------------------------------------------------------
     def _parse_grasp(self) -> GRASP:
@@ -350,6 +328,14 @@ class Parser:
     @staticmethod
     def _starts_cb(token: Optional[Token]) -> bool:
         return Parser._is_coord(token)
+
+    @staticmethod
+    def _is_object_tag(tag: str) -> bool:
+        return isinstance(tag, str) and tag.startswith('object') and tag[6:].isdigit()
+
+    def _consume_until_end(self) -> None:
+        while self.current() not in (None, 'end'):
+            self.advance()
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +390,7 @@ def parse_with_cpp(tokens: List[Token]) -> Seq:
         RuntimeError: If C++ parser is not available or fails
         ParseError: If parsing fails due to invalid tokens
     """
+    '''
     parser_cpp = _get_pybind_parser()
     
     if parser_cpp is None:
@@ -423,6 +410,9 @@ def parse_with_cpp(tokens: List[Token]) -> Seq:
         
     except Exception as e:
         raise RuntimeError(f"C++ parser failed: {e}")
+    '''
+    parser = Parser(tokens)
+    return parser.parse()
 
 
 # ---------------------------------------------------------------------------
@@ -435,20 +425,26 @@ class Serializer:
     def serialize(seq: Seq) -> List[Token]:
         """Serialize a Seq AST back to a flat token list."""
         tokens: List[Token] = []
-        
+
+        items: List[Union[Scene, UNSEG, AMODAL, GRASP, SB]] = list(seq.items)
+        if not any(isinstance(item, Scene) for item in items):
+            legacy_sbs = [item for item in items if isinstance(item, SB)]
+            remaining = [item for item in items if not isinstance(item, SB)]
+            items = [Scene(sbs=legacy_sbs)] + remaining
+
         # Serialize all items in the sequence
-        for item in seq.items:
-            if isinstance(item, SB):
+        for item in items:
+            if isinstance(item, Scene):
+                tokens.extend(Serializer._serialize_scene(item))
+            elif isinstance(item, SB):
                 tokens.extend(Serializer._serialize_sb(item))
             elif isinstance(item, UNSEG):
                 tokens.extend(Serializer._serialize_unseg(item))
-            elif isinstance(item, INPAINT):
-                tokens.extend(Serializer._serialize_inpaint(item))
             elif isinstance(item, AMODAL):
                 tokens.extend(Serializer._serialize_amodal(item))
             elif isinstance(item, GRASP):
                 tokens.extend(Serializer._serialize_grasp(item))
-        
+
         # Add the final 'end' token
         tokens.append('end')
         return tokens
@@ -463,45 +459,30 @@ class Serializer:
             tokens.extend(Serializer._serialize_cb(cb))
         
         return tokens
+
+    @staticmethod
+    def _serialize_scene(scene: Scene) -> List[Token]:
+        tokens: List[Token] = ['scene']
+        for sb in scene.sbs:
+            tokens.extend(Serializer._serialize_sb(sb))
+        return tokens
     
     @staticmethod
     def _serialize_unseg(unseg: UNSEG) -> List[Token]:
         """Serialize an UNSEG node to tokens."""
-        tokens: List[Token] = ['unlabel']  # Start with 'unlabel'
-        
-        # Add all CB tokens
-        for cb in unseg.cbs:
-            tokens.extend(Serializer._serialize_cb(cb))
-        
-        # Add 'segment' separator
-        tokens.append('segment')
-        
-        # Add all SB tokens
+        tokens: List[Token] = ['segment']
+
+        # Add all SB tokens inside UNSEG (must all use objectXX tags)
         for sb in unseg.sbs:
             tokens.extend(Serializer._serialize_sb(sb))
-        
+
         tokens.append('endunseg')
         return tokens
-    
-    @staticmethod
-    def _serialize_inpaint(inpaint: INPAINT) -> List[Token]:
-        tokens: List[Token] = ['fragment']
-        for cb in inpaint.cbs:
-            tokens.extend(Serializer._serialize_cb(cb))
-        tokens.append('inpaint')
-        if inpaint.sb is not None:
-            tokens.extend(Serializer._serialize_sb(inpaint.sb))
-        tokens.append('endinpaint')
-        return tokens
-    
+
     @staticmethod
     def _serialize_amodal(amodal: AMODAL) -> List[Token]:
-        tokens: List[Token] = ['tagfragment']
-        for sb in amodal.fragment_sbs:
-            tokens.extend(Serializer._serialize_sb(sb))
-        tokens.append('amodal')
-        for sb in amodal.amodal_sbs:
-            tokens.extend(Serializer._serialize_sb(sb))
+        tokens: List[Token] = ['amodal']
+        tokens.extend(Serializer._serialize_sb(amodal.sb))
         tokens.append('endamodal')
         return tokens
     
@@ -558,7 +539,7 @@ if __name__ == '__main__':
     
     # 测试案例1: 基础SB解析
     print("测试1: 基础SB结构")
-    tokens1 = ['object01', (10, 20, 30), '<serial5>', 'object02', (40, 50, 60), 'end']
+    tokens1 = ['scene', 'object01', (10, 20, 30), '<serial5>', 'object02', (40, 50, 60), 'end']
     print(f"输入tokens: {tokens1}")
     
     parser1 = Parser(tokens1)
@@ -570,72 +551,76 @@ if __name__ == '__main__':
     print(f"序列化结果: {serialized1}")
     print(f"往返测试: {'通过' if tokens1 == serialized1 else '失败'}\n")
     
-    # 测试案例2: UNSEG结构
-    print("测试2: UNSEG结构")
-    tokens2 = ['unlabel', (5, 15, 25), (35, 45, 55), 'segment', 'object01', (65, 75, 85), 'endunseg', 'end']
+    # 测试案例2: AMODAL结构
+    print("测试2: AMODAL结构")
+    tokens2 = [
+        'scene',
+        'object03', (15, 25, 35),
+        'amodal', 'unlabel', (45, 55, 65),
+        'endamodal',
+        'end'
+    ]
     print(f"输入tokens: {tokens2}")
-    
+
     parser2 = Parser(tokens2)
     ast2 = parser2.parse()
     print(f"解析结果:\n{ast2}")
-    
+
     serialized2 = Serializer.serialize(ast2)
     print(f"序列化结果: {serialized2}")
     print(f"往返测试: {'通过' if tokens2 == serialized2 else '失败'}\n")
-    
-    # 测试案例3: INPAINT结构
-    print("测试3: INPAINT结构")
-    tokens3 = ['fragment', (1, 2, 3), (4, 5, 6), 'inpaint', 'object01', (7, 8, 9), 'endinpaint', 'end']
+
+    # 测试案例3: UNSEG结构
+    print("测试3: UNSEG结构")
+    tokens3 = [
+        'scene',
+        'segment',
+        'object10', (5, 15, 25),
+        'object11', (35, 45, 55), '<serial2>',
+        'endunseg',
+        'end'
+    ]
     print(f"输入tokens: {tokens3}")
-    
+
     parser3 = Parser(tokens3)
     ast3 = parser3.parse()
     print(f"解析结果:\n{ast3}")
-    
+
     serialized3 = Serializer.serialize(ast3)
     print(f"序列化结果: {serialized3}")
     print(f"往返测试: {'通过' if tokens3 == serialized3 else '失败'}\n")
-    
-    # 测试案例4: AMODAL结构
-    print("测试4: AMODAL结构")
-    tokens4 = ['tagfragment', 'object02', (10, 11, 12), 'amodal', 'object01', (13, 14, 15), 'endamodal', 'end']
+
+    # 测试案例4: 混合结构
+    print("测试4: 混合结构")
+    tokens4 = [
+        'scene',
+        'object20', (1, 1, 1), '<serial10>',
+        'object21', (2, 2, 2),
+        'amodal', 'unlabel', (3, 3, 3), '<serial5>', 'endamodal',
+        'segment', 'object30', (4, 4, 4), 'object31', (5, 5, 5), '<serial7>', 'endunseg',
+        'detectgrasp',
+        'grasp', 'object01', (6, 6, 6), '<serial9>',
+        'grasp', 'object02', (7, 7, 7),
+        'end'
+    ]
     print(f"输入tokens: {tokens4}")
-    
+
     parser4 = Parser(tokens4)
     ast4 = parser4.parse()
     print(f"解析结果:\n{ast4}")
-    
+
     serialized4 = Serializer.serialize(ast4)
     print(f"序列化结果: {serialized4}")
     print(f"往返测试: {'通过' if tokens4 == serialized4 else '失败'}\n")
-    
-    # 测试案例5: 混合复杂结构
-    print("测试5: 混合复杂结构")
-    tokens5 = [
-        'object01', (1, 1, 1), '<serial10>',
-        'unlabel', (2, 2, 2), 'segment', 'object02', (3, 3, 3), 'endunseg',
-        'fragment', (4, 4, 4), 'inpaint', 'endinpaint',
-        'tagfragment', 'object03', (5, 5, 5), 'amodal', 'endamodal',
-        'end'
-    ]
-    print(f"输入tokens: {tokens5}")
-    
-    parser5 = Parser(tokens5)
-    ast5 = parser5.parse()
-    print(f"解析结果:\n{ast5}")
-    
-    serialized5 = Serializer.serialize(ast5)
-    print(f"序列化结果: {serialized5}")
-    print(f"往返测试: {'通过' if tokens5 == serialized5 else '失败'}\n")
-    
-    # 测试案例8: 错误处理
-    print("测试8: 错误处理测试")
+
+    # 测试案例5: 错误处理
+    print("测试5: 错误处理测试")
     invalid_tokens = ['object01', 'invalid_coordinate', 'end']
     print(f"输入无效tokens: {invalid_tokens}")
-    
-    parser8 = Parser(invalid_tokens)
-    ast8 = parser8.parse()  # 解析器会处理错误并返回部分结果
-    print(f"错误处理后的解析结果:\n{ast8}")
+
+    parser5 = Parser(invalid_tokens)
+    ast5 = parser5.parse()  # 解析器会处理错误并返回部分结果
+    print(f"错误处理后的解析结果:\n{ast5}")
     
     # 测试序列标签验证
     print("\n测试9: 序列标签验证")
@@ -651,6 +636,7 @@ if __name__ == '__main__':
     # 测试案例6: GRASP结构
     print("测试6: GRASP结构")
     tokens6 = [
+        'scene',
         'detectgrasp', 
         'grasp', 'object01', (10, 20, 30), '<serial5>',
         'grasp', 'object02', (40, 50, 60), (70, 80, 90),
@@ -668,7 +654,7 @@ if __name__ == '__main__':
     
     # 测试案例7: 空GRASP结构
     print("测试7: 空GRASP结构")
-    tokens7 = ['detectgrasp', 'end']
+    tokens7 = ['scene', 'detectgrasp', 'end']
     print(f"输入tokens: {tokens7}")
     
     parser7 = Parser(tokens7)

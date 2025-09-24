@@ -15,7 +15,7 @@ class TokenManager:
     
     def __init__(self):
         # 基础形状标签
-        self._base_shape_tags = ['unknow']
+        self._base_shape_tags = ['unknow', 'unlabel', 'incomplete']
         self._base_shape_tags = self._base_shape_tags + ['object%02d' % i for i in range(88)]  # object00 - object87
 
         # 序列标签模式 - 根据文法定义：SERIAL → '<serial' INT '>'，范围1-240
@@ -23,8 +23,7 @@ class TokenManager:
         self._max_serial_value = 240
         
         # 命令标签，需要出现在AST中
-        self._command_tokens = ['unlabel', 'segment', 'endunseg', 'fragment', 'inpaint', 'endinpaint', 'tagfragment', 'amodal', 'endamodal', 'end', 'feat', 
-                                'detectgrasp', 'grasp']
+        self._command_tokens = ['scene', 'segment', 'endunseg', 'amodal', 'endamodal', 'detectgrasp', 'grasp', 'end']
         
         # 动态标签列表
         self._dynamic_tags = []
