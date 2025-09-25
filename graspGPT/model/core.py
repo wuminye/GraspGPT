@@ -397,7 +397,7 @@ def generate_amodal_sequence(
 
     # 数据增强：随机删除部分可见点，并为剩余点添加坐标噪声
     drop_probability = 0.2
-    noise_magnitude = 0.7
+    noise_magnitude = 0
 
     def _clamp(value: int, upper_bound: int) -> int:
         return max(0, min(upper_bound, value))
@@ -517,6 +517,8 @@ def generate_amodal_sequence(
         if isinstance(item, UNSEG):
             new_items.append(item)
         elif isinstance(item, GRASP):
+            for gb in item.gbs:
+                gb.tag = 'incomplete'
             new_items.append(item)
 
     new_seq = Seq(items=new_items)
