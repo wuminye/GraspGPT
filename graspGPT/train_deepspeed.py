@@ -56,7 +56,7 @@ def get_default_config():
     
     # Model configuration
     C.model = graspGPT.get_default_config()
-    C.model.model_type = 'gpt-nano'  # or specify custom n_layer, n_head, n_embd
+    C.model.model_type = 'gpt2'  # or specify custom n_layer, n_head, n_embd
     C.model.vocab_size = None  # Will be set from dataset
     C.model.block_size = 8192   # Maximum sequence length
     C.model.use_rope = True    # Use RoPE position encoding
@@ -80,14 +80,14 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/precomputed_data/"
-    C.dataset.max_sequence_length = 1000
+    C.dataset.max_sequence_length = 6000
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
     
     # System configuration
     C.system = CN()
-    C.system.output_dir = "../output/checkpoints"
-    C.system.save_every = 2000  # Save checkpoint every N iterations
+    C.system.output_dir = "../output/checkpoints_amodal"
+    C.system.save_every = 3000  # Save checkpoint every N iterations
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
     
@@ -102,7 +102,7 @@ def get_default_config():
     C.wandb.project = 'graspgpt-deepspeed'
     C.wandb.entity = None  # Set to your wandb username/team
     C.wandb.name = None    # Run name, will be auto-generated if None
-    C.wandb.tags = ['deepspeed', 'multi-gpu']      # List of tags for the run
+    C.wandb.tags = ['amodal', 'multi-gpu']      # List of tags for the run
     
     return C
 

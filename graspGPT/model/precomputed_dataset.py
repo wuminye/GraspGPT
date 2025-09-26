@@ -14,13 +14,12 @@ import random
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
     from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from .core import generate_amodal_sequence
 except ImportError:
-    try:
-        from token_manager import get_token_manager, decode_sequence, encode_sequence
-        from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
-    except ImportError:
-        from minGPT.token_manager import get_token_manager, decode_sequence, encode_sequence
-        from minGPT.parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from token_manager import get_token_manager, decode_sequence, encode_sequence
+    from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from core import generate_amodal_sequence
+
 
 
 class PrecomputedDataset(Dataset):
@@ -233,7 +232,7 @@ class PrecomputedDataset(Dataset):
                         # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                         if gb.tag in sb_tags:
                             current_count = tag_count.get(gb.tag, 0)
-                            if current_count < 4:
+                            if current_count < 20:
                                 filtered_gbs.append(gb)
                                 tag_count[gb.tag] = current_count + 1
 
@@ -278,7 +277,13 @@ class PrecomputedDataset(Dataset):
 
         tokens = self.filter_grasp_tokens(tokens)
 
+        if random.random() < 0.5:
+            # 50%概率下进行amodal数据增强
+            tokens = generate_amodal_sequence(tokens,self.volume_dims)
+
         tokens = encode_sequence(tokens, self.token_mapping)
+
+        tokens = tokens[:-1]  # Remove the final EOS token for training
 
         seq_len = len(tokens)
 

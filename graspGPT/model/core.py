@@ -424,7 +424,7 @@ def generate_amodal_sequence(
     if not augmented_visible_cbs:
         augmented_visible_cbs = [CB(coord=cb.coord, serial=cb.serial) for cb in visible_cbs]
 
-    augmented_visible_cbs.sort(key=lambda cb: cb.coord)
+    
 
     # 构造深度图（同时尝试保留 torch / numpy 表示）
     depth_tensor = None
@@ -508,6 +508,10 @@ def generate_amodal_sequence(
         projection_details['depth_tensor'] = depth_tensor
 
     # ---- 阶段3：重新组织 token sequence -----------------------------------------------
+    
+    augmented_visible_cbs.sort(key=lambda cb: cb.coord)
+    combined_cbs.sort(key=lambda cb: cb.coord)
+    
     new_scene = Scene(sbs=[SB(tag='incomplete', cbs=augmented_visible_cbs)])
     amodal_sb = SB(tag='unlabel', cbs=list(combined_cbs))
     new_amodal = AMODAL(sb=amodal_sb)
