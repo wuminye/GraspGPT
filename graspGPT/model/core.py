@@ -138,9 +138,9 @@ def generate_amodal_sequence(
 
     函数分三个阶段执行：
         1. 目标相机参数生成：随机采样包围盒外的相机位置，构造透视相机内外参。
-        2. 点云投影与遮挡处理：使用 point splatting 渲染，前景点以更大的 splat 半径
-           覆盖更多像素，实现按深度的遮挡淘汰。
-        3. 序列组织：根据可见 / 被遮挡结果，重建符合语法的 token sequence。
+        2. 点云投影与深度估计：使用 point splatting 渲染，生成供反投影使用的
+           深度图。
+        3. 序列组织：根据深度反投影结果，重建符合语法的 token sequence。
     """
 
     if len(voxel_dims) < 2:
@@ -291,10 +291,43 @@ def generate_amodal_sequence(
     max_splat_radius = max(2, min(8, int(max(width, height) * 0.05)))
 
     depth_map: List[List[float]] = [[float('inf')] * width for _ in range(height)]
-    owner_map: List[List[Optional[int]]] = [[None] * width for _ in range(height)]
+
+    gaussian_kernel: Tuple[Tuple[int, int, int], ...] = (
+        (1, 2, 1),
+        (2, 4, 2),
+        (1, 2, 1),
+    )
+
+    def _smooth_depth_map(values: List[List[float]]) -> List[List[float]]:
+        if np is not None:
+            kernel = np.asarray(gaussian_kernel, dtype=float)
+            kernel_sum = kernel.sum()
+            if kernel_sum > 0:
+                kernel /= kernel_sum
+
+            depth_array = np.asarray(values, dtype=float)
+            finite_mask = np.isfinite(depth_array)
+            depth_filled = np.where(finite_mask, depth_array, 0.0)
+            mask_float = finite_mask.astype(float)
+
+
+            depth_filtered = cv2.filter2D(depth_filled, -1, kernel, borderType=cv2.BORDER_REFLECT101)
+            weight_map = cv2.filter2D(mask_float, -1, kernel, borderType=cv2.BORDER_REFLECT101)
+        
+
+            with np.errstate(divide='ignore', invalid='ignore'):
+                smoothed_np = np.where(weight_map > 0.0, depth_filtered / weight_map, depth_array)
+            return smoothed_np.tolist()
+
+
     point_infos: List[Dict[str, Any]] = []
 
-    for idx, cb in enumerate(combined_cbs):
+    floor_coords = []
+    for x in  range(voxel_dims[0]):
+        for y in range(voxel_dims[1]):
+            floor_coords.append(CB(coord=(x, y, 0)))
+
+    for idx, cb in enumerate(combined_cbs+floor_coords):
         coord = cb.coord
         rel = (
             float(coord[0]) - camera_position[0],
@@ -314,13 +347,10 @@ def generate_amodal_sequence(
             'projected': None,
             'pixel': None,
             'splat_radius': 0,
-            'visible': False,
-            'reason': None,
         }
         point_infos.append(info)
 
         if cam_z <= epsilon:
-            info['reason'] = 'behind_camera'
             continue
 
         proj_x = (cam_x / cam_z) * focal_x + principal_x
@@ -332,13 +362,11 @@ def generate_amodal_sequence(
         info['pixel'] = (pixel_u, pixel_v)
 
         if not (0 <= pixel_u < width and 0 <= pixel_v < height):
-            info['reason'] = 'outside_fov'
             continue
 
         splat_radius = max(1, int(round(splat_scale / max(cam_z, epsilon))))
         splat_radius = min(splat_radius, max_splat_radius)
         info['splat_radius'] = splat_radius
-        info['splat_attempted'] = True
 
         radius_sq = splat_radius * splat_radius
         for dv in range(-splat_radius, splat_radius + 1):
@@ -351,51 +379,12 @@ def generate_amodal_sequence(
                     continue
 
                 existing_depth = depth_map[v][u]
-                existing_idx = owner_map[v][u]
-                if (
-                    existing_depth == float('inf')
-                    or cam_z < existing_depth - epsilon
-                    or (
-                        abs(cam_z - existing_depth) <= epsilon
-                        and (existing_idx is None or idx < existing_idx)
-                    )
-                ):
+                if existing_depth == float('inf') or cam_z < existing_depth - epsilon:
                     depth_map[v][u] = cam_z
-                    owner_map[v][u] = idx
 
-    coverage_counts = {idx: 0 for idx in range(len(combined_cbs))}
-    for v in range(height):
-        for u in range(width):
-            owner_idx = owner_map[v][u]
-            if owner_idx is not None:
-                coverage_counts[owner_idx] += 1
+    depth_map = _smooth_depth_map(depth_map)
 
-    visible_set = {idx for idx, count in coverage_counts.items() if count > 0}
-    for idx, info in enumerate(point_infos):
-        info['covered_pixels'] = coverage_counts[idx]
-        if idx in visible_set:
-            info['visible'] = True
-            info['reason'] = 'visible'
-        else:
-            if info.get('reason') is None:
-                if info.get('splat_attempted'):
-                    info['reason'] = 'occluded_by_depth'
-                else:
-                    info['reason'] = 'no_pixel_coverage'
-
-    visible_indices = sorted(visible_set, key=lambda i: combined_cbs[i].coord)
-    visible_cbs = [combined_cbs[i] for i in visible_indices]
-
-    occluded_indices = sorted(
-        set(range(len(combined_cbs))) - visible_set,
-        key=lambda i: combined_cbs[i].coord,
-    )
-    occluded_cbs = [combined_cbs[i] for i in occluded_indices]
-
-    if not visible_cbs:
-        raise ValueError("所有坐标在投影后都被剔除，无法生成新的 SCENE")
-
-    # 数据增强：随机删除部分可见点，并为剩余点添加坐标噪声
+    # 由深度图反投影生成 incomplete 视角的体素点云
     drop_probability = 0.2
     noise_magnitude = 0
 
@@ -408,21 +397,71 @@ def generate_amodal_sequence(
         max(int(round(dim_z)) - 1, 0),
     )
 
-    augmented_visible_cbs: List[CB] = []
-    for cb in visible_cbs:
+    reconstructed_voxels: set = set()
+    for v in range(height):
+        for u in range(width):
+            depth = depth_map[v][u]
+            if not math.isfinite(depth) or depth <= epsilon:
+                continue
+
+            z_cam = depth
+            x_cam = ((u + 0.5) - principal_x) * z_cam / focal_x
+            y_cam = -((v + 0.5) - principal_y) * z_cam / focal_y
+
+            world_point = (
+                camera_position[0] + x_cam * right_vec[0] + y_cam * up_vec[0] + z_cam * forward[0],
+                camera_position[1] + x_cam * right_vec[1] + y_cam * up_vec[1] + z_cam * forward[1],
+                camera_position[2] + x_cam * right_vec[2] + y_cam * up_vec[2] + z_cam * forward[2],
+            )
+
+            if (
+                world_point[0] < -epsilon
+                or world_point[1] < -epsilon
+                or world_point[2] < -epsilon
+                or world_point[0] > dim_x + epsilon
+                or world_point[1] > dim_y + epsilon
+                or world_point[2] > dim_z + epsilon
+            ):
+                continue
+
+            discrete_coord = (
+                _clamp(int(round(world_point[0])), max_indices[0]),
+                _clamp(int(round(world_point[1])), max_indices[1]),
+                _clamp(int(round(world_point[2])), max_indices[2]),
+            )
+            if discrete_coord[2] >=2:  # delete floor
+                reconstructed_voxels.add(discrete_coord)
+
+    reconstructed_voxels_list = sorted(reconstructed_voxels)
+
+    incomplete_coords: List[Tuple[int, int, int]] = []
+    for coord in reconstructed_voxels_list:
         if rng.random() < drop_probability:
             continue
 
         noisy_coord: List[int] = []
-        for coord_value, upper_bound in zip(cb.coord, max_indices):
+        for coord_value, upper_bound in zip(coord, max_indices):
             noise = rng.uniform(-noise_magnitude, noise_magnitude)
             perturbed = int(round(coord_value + noise))
             noisy_coord.append(_clamp(perturbed, upper_bound))
 
-        augmented_visible_cbs.append(CB(coord=tuple(noisy_coord), serial=cb.serial))
+        incomplete_coords.append(tuple(noisy_coord))
 
-    if not augmented_visible_cbs:
-        augmented_visible_cbs = [CB(coord=cb.coord, serial=cb.serial) for cb in visible_cbs]
+    if not incomplete_coords:
+        if reconstructed_voxels_list:
+            incomplete_coords = reconstructed_voxels_list
+        else:
+            incomplete_coords = [cb.coord for cb in combined_cbs]
+
+    unique_incomplete_coords: List[Tuple[int, int, int]] = []
+    seen_coords: set = set()
+    for coord in incomplete_coords:
+        if coord in seen_coords:
+            continue
+        seen_coords.add(coord)
+        unique_incomplete_coords.append(coord)
+
+    incomplete_cbs = [CB(coord=coord) for coord in unique_incomplete_coords]
 
     
 
@@ -465,7 +504,7 @@ def generate_amodal_sequence(
             'dtype': 'float',
         }
 
-    '''
+    
     if cv2 is not None and np is not None:
         depth_for_save = np.asarray(depth_image_numeric, dtype=float)
         finite_mask = np.isfinite(depth_for_save)
@@ -481,18 +520,16 @@ def generate_amodal_sequence(
         depth_vis = (np.clip(depth_norm, 0.0, 1.0) * 255).astype(np.uint8)
         cv2.imwrite('sd.jpg', depth_vis)
     #import pdb; pdb.set_trace()
-    '''
+    
 
     projection_details: Dict[str, Any] = {
         'camera': camera_params,
         'raw_projections': point_infos,
         'depth_image': depth_image_numeric,
         'depth_image_metadata': depth_metadata,
-        'occluded': occluded_cbs,
-        'visible_indices': visible_indices,
         'total_coords': len(combined_cbs),
-        'retained_count': len(augmented_visible_cbs),
-        'removed_count': len(combined_cbs) - len(augmented_visible_cbs),
+        'retained_count': len(incomplete_cbs),
+        'removed_count': max(0, len(reconstructed_voxels_list) - len(incomplete_cbs)),
         'splat_settings': {
             'scale': splat_scale,
             'max_radius': max_splat_radius,
@@ -500,19 +537,21 @@ def generate_amodal_sequence(
         'augmentation': {
             'drop_probability': drop_probability,
             'noise_magnitude': noise_magnitude,
-            'visible_before': [cb.coord for cb in visible_cbs],
-            'visible_after': [cb.coord for cb in augmented_visible_cbs],
+        },
+        'depth_back_projection': {
+            'reconstructed': reconstructed_voxels_list,
+            'retained': [cb.coord for cb in incomplete_cbs],
         },
     }
     if depth_tensor is not None:
         projection_details['depth_tensor'] = depth_tensor
 
     # ---- 阶段3：重新组织 token sequence -----------------------------------------------
-    
-    augmented_visible_cbs.sort(key=lambda cb: cb.coord)
+
+    incomplete_cbs.sort(key=lambda cb: cb.coord)
     combined_cbs.sort(key=lambda cb: cb.coord)
-    
-    new_scene = Scene(sbs=[SB(tag='incomplete', cbs=augmented_visible_cbs)])
+
+    new_scene = Scene(sbs=[SB(tag='incomplete', cbs=incomplete_cbs)])
     amodal_sb = SB(tag='unlabel', cbs=list(combined_cbs))
     new_amodal = AMODAL(sb=amodal_sb)
 
@@ -531,3 +570,107 @@ def generate_amodal_sequence(
     if return_details:
         return serialized, projection_details
     return serialized
+
+
+def generate_seg_sequence(
+    token_sequence: List[Union[str, Tuple[int, int, int]]],
+    voxel_dims: Tuple[Union[int, float], Union[int, float], Union[int, float]],
+    camera_resolution: Tuple[int, int] = (192, 192),
+    rng: Optional[random.Random] = None,
+    return_details: bool = False,
+    fov_y_degrees: float = 80.0,
+) -> Union[
+    List[Union[str, Tuple[int, int, int]]],
+    Tuple[List[Union[str, Tuple[int, int, int]]], Dict[str, Any]],
+]:
+    """在 AMODAL 序列基础上插入由 SCENE 转换而来的 UNSEG 段。"""
+
+    parser = Parser(token_sequence)
+    original_seq = parser.parse()
+    original_scene = next((item for item in original_seq.items if isinstance(item, Scene)), None)
+    if original_scene is None:
+        raise ValueError("输入的 token 序列不包含 SCENE 段，无法生成 UNSEG 数据")
+
+    def _clone_sb(sb: SB) -> SB:
+        return SB(tag=sb.tag, cbs=[CB(coord=cb.coord, serial=cb.serial) for cb in sb.cbs])
+
+    scene_unseg = UNSEG(sbs=[_clone_sb(sb) for sb in original_scene.sbs])
+
+    amodal_result = generate_amodal_sequence(
+        token_sequence,
+        voxel_dims,
+        camera_resolution=camera_resolution,
+        rng=rng,
+        return_details=return_details,
+        fov_y_degrees=fov_y_degrees,
+    )
+
+    if return_details:
+        new_tokens, projection_details = amodal_result
+    else:
+        new_tokens = amodal_result  # type: ignore[assignment]
+        projection_details = None
+
+    new_seq = Parser(new_tokens).parse()
+
+    insert_index: Optional[int] = None
+    for idx, item in enumerate(new_seq.items):
+        if isinstance(item, AMODAL):
+            insert_index = idx + 1
+            break
+
+    if insert_index is None:
+        raise ValueError("生成的 token 序列中缺少 AMODAL 段，无法插入 UNSEG")
+
+    new_seq.items.insert(insert_index, scene_unseg)
+    modified_tokens = Serializer.serialize(new_seq)
+
+    if return_details and projection_details is not None:
+        return modified_tokens, projection_details
+    return modified_tokens
+
+
+def maybe_drop_amodal_or_unseg(
+    seg_output: Union[
+        List[Union[str, Tuple[int, int, int]]],
+        Tuple[List[Union[str, Tuple[int, int, int]]], Dict[str, Any]],
+    ],
+    rng: Optional[random.Random] = None,
+) -> Union[
+    List[Union[str, Tuple[int, int, int]]],
+    Tuple[List[Union[str, Tuple[int, int, int]]], Dict[str, Any]],
+]:
+    """随机丢弃 AMODAL 或 UNSEG 段，用于 generate_seg_sequence 的后处理。"""
+
+    def _apply(
+        tokens: List[Union[str, Tuple[int, int, int]]],
+    ) -> List[Union[str, Tuple[int, int, int]]]:
+        parser = Parser(tokens)
+        seq = parser.parse()
+
+        amodal_present = any(isinstance(item, AMODAL) for item in seq.items)
+        unseg_present = any(isinstance(item, UNSEG) for item in seq.items)
+
+        randomizer = rng or random
+        choices: List[str] = ['noop']
+        if amodal_present:
+            choices.append('drop_amodal')
+        if unseg_present:
+            choices.append('drop_unseg')
+
+        action = randomizer.choice(choices) if len(choices) > 1 else 'noop'
+
+        filtered_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = []
+        for item in seq.items:
+            if action == 'drop_amodal' and isinstance(item, (AMODAL, UNSEG)):
+                continue
+            if action == 'drop_unseg' and isinstance(item, UNSEG):
+                continue
+            filtered_items.append(item)
+
+        return Serializer.serialize(Seq(items=filtered_items))
+
+    if isinstance(seg_output, tuple):
+        tokens, details = seg_output
+        return _apply(tokens), details
+    return _apply(seg_output)

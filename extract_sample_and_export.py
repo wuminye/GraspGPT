@@ -96,7 +96,7 @@ def save_pointcloud_as_ply(points: np.ndarray, filename: str, colors: Optional[n
             else:
                 f.write(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n")
     
-    print(f"已保存点云: {filename} ({len(points)} 个点)")
+    #print(f"已保存点云: {filename} ({len(points)} 个点)")
 
 def tokens_ids_to_sequence(token_ids: List[int], token_mapping: Dict) -> Seq:
     """
@@ -192,7 +192,7 @@ def extract_pointclouds_by_category(
                 points = _cbs_to_world(gb.cbs, bbox_min, voxel_size)
                 if len(points):
                     grasp_clouds[gb.tag].append(points)
-                    print(f"GRASP '{gb.tag}': {len(points)} 个点")
+                    #print(f"GRASP '{gb.tag}': {len(points)} 个点")
 
     return scene_clouds, amodal_clouds, unseg_clouds, grasp_clouds
 
@@ -323,7 +323,7 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     
     # 加载dataset
     try:
-        dataset = PrecomputedDataset(dataset_path, max_sequence_length=4096)
+        dataset = PrecomputedDataset(dataset_path, max_sequence_length=12800)
         print(f"Dataset加载成功，包含 {len(dataset)} 个样本")
     except Exception as e:
         print(f"加载dataset失败: {e}")
@@ -353,8 +353,8 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
 
     decoded_tokens = decode_sequence(tokens.squeeze().numpy(), dataset.token_mapping)
     
-    tokens = generate_amodal_sequence(decoded_tokens, voxel_dims=(volume_dims[0], volume_dims[1], volume_dims[2]))
-    tokens = encode_sequence(tokens, dataset.token_mapping)
+    #decoded_tokens = generate_amodal_sequence(decoded_tokens, voxel_dims=(volume_dims[0], volume_dims[1], volume_dims[2]))
+    tokens = encode_sequence(decoded_tokens, dataset.token_mapping)
 
     # 创建输出目录
     sample_dir = Path(output_dir) / f"sample_{sample_idx}"

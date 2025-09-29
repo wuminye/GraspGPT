@@ -64,6 +64,7 @@ def analyze_sample_lengths(dataset, sample_size=None):
             # Get data through __getitem__
             # PrecomputedDataset returns: (tokens, max_sequence_length, scene_grasps)
             tokens, max_seq_len, scene_grasps = dataset[idx]
+            
             # Get token sequence length
             if isinstance(tokens, torch.Tensor):
                 token_length = tokens.shape[0]  # sequence length
@@ -71,8 +72,7 @@ def analyze_sample_lengths(dataset, sample_size=None):
                 token_length = len(tokens)
             
             # Get voxel and color group information from decoded tokens
-            sample = dataset.data[idx]
-            raw_tokens = sample['raw_tokens']
+            raw_tokens = dataset.data[idx]
             
             # Decode tokens to get original token list
             from graspGPT.model.token_manager import decode_sequence
@@ -467,7 +467,7 @@ def main():
     try:
         dataset = PrecomputedDataset(
             data_path=data_path,
-            max_sequence_length=6000
+            max_sequence_length=12800
         )
         
         print(f"Dataset size: {len(dataset)} samples")
@@ -530,8 +530,8 @@ def main():
     
     # Distribution across different length intervals
     print(f"\n=== Length Interval Distribution ===")
-    bins = [0, 100, 500, 1000, 1500, 2000, 3000, 4000,  max_seq_len, np.inf]
-    labels = ['<100', '100-500', '500-1000', '1000-1500', '1500-2000', '2000-3000', '3000-4000', f'4000-{max_seq_len}', f'>{max_seq_len}']
+    bins = [0,  2000, 4000, 8000, 10000,  max_seq_len, np.inf]
+    labels = ['<2000',  '2000-4000', '4000-8000', '8000-10000',f'10000-{max_seq_len}', f'>{max_seq_len}']
     
     hist, _ = np.histogram(lengths, bins=bins)
     for i, (label, count) in enumerate(zip(labels, hist)):
@@ -555,8 +555,8 @@ def benchmark_parser_performance(dataset, sample_size=100):
     for idx in indices:
         try:
             # Get raw tokens from dataset
-            sample = dataset.data[idx]
-            raw_tokens = sample['raw_tokens']
+            raw_tokens = dataset.data[idx]
+            
             
             # Decode tokens to get original token list
             from graspGPT.model.token_manager import decode_sequence
@@ -727,7 +727,7 @@ if __name__ == "__main__":
         data_path = "output/precomputed_data/"
         dataset = PrecomputedDataset(
             data_path=data_path,
-            max_sequence_length=6000
+            max_sequence_length=12800
         )
         
         # Run performance benchmark

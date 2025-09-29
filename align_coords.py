@@ -555,10 +555,34 @@ def transform_and_save_pointcloud(pcd_data, output_path, rotation_matrix, transl
 
     return True
 
+
+def transform_and_save_scene_pointcloud(scene_path: Path, rotation_matrix: np.ndarray, translation_vector: np.ndarray,
+                                        bbox_min: np.ndarray, bbox_max: np.ndarray) -> bool:
+    """Transform a *_scene.ply point cloud, crop to bbox, and save as *_scene_aligned.ply"""
+    scene_pcd = o3d.io.read_point_cloud(str(scene_path))
+    if len(scene_pcd.points) == 0:
+        print(f"Warning: Empty scene point cloud {scene_path.name}, skipping")
+        return False
+
+    scene_pcd.rotate(rotation_matrix, center=(0, 0, 0))
+    scene_pcd.translate(translation_vector)
+
+    aligned_scene = filter_points_by_bbox(scene_pcd, bbox_min, bbox_max)
+    print(f"Scene {scene_path.name}: {len(scene_pcd.points)} -> {len(aligned_scene.points)} points inside bbox")
+
+    output_path = scene_path.parent / f"{scene_path.stem}_aligned.ply"
+    if o3d.io.write_point_cloud(str(output_path), aligned_scene):
+        print(f"Saved aligned scene point cloud: {output_path}")
+        return True
+
+    print(f"Failed to save aligned scene point cloud: {output_path}")
+    return False
+
+
 def save_transformation_xml(rotation_matrix, translation_vector, min_bound, max_bound, voxel_size, output_path):
     """Save transformation matrices, bounding box, and voxel resolution to XML file"""
     root = ET.Element("transformation")
-    
+
     # Add rotation matrix
     rotation_elem = ET.SubElement(root, "rotation_matrix")
     rotation_elem.text = " ".join([str(x) for x in rotation_matrix.flatten()])
@@ -591,6 +615,44 @@ def save_transformation_xml(rotation_matrix, translation_vector, min_bound, max_
     tree.write(output_path, encoding="utf-8", xml_declaration=True)
     print(f"Transformation data saved to: {output_path}")
     print(f"Volume dimensions: {voxel_dims} voxels at {voxel_size}m resolution")
+
+
+def load_transformation_xml(xml_path):
+    """Load rotation, translation, bbox, and voxel size from existing XML file"""
+    tree = ET.parse(str(xml_path))
+    root = tree.getroot()
+
+    def parse_float_list(text, expected_length):
+        if text is None:
+            raise ValueError("Missing expected numeric data in transformation.xml")
+        values = [float(x) for x in text.strip().split()]
+        if len(values) != expected_length:
+            raise ValueError(f"Expected {expected_length} values, got {len(values)}")
+        return values
+
+    rotation_values = parse_float_list(root.findtext("rotation_matrix"), 9)
+    translation_values = parse_float_list(root.findtext("translation_vector"), 3)
+
+    bbox_elem = root.find("bounding_box")
+    if bbox_elem is None:
+        raise ValueError("Missing bounding_box element in transformation.xml")
+
+    min_bound_values = parse_float_list(bbox_elem.findtext("min_bound"), 3)
+    max_bound_values = parse_float_list(bbox_elem.findtext("max_bound"), 3)
+
+    voxel_text = root.findtext("voxel_resolution")
+    if voxel_text is None:
+        raise ValueError("Missing voxel_resolution element in transformation.xml")
+    voxel_size = float(voxel_text.strip())
+
+    return {
+        'rotation_matrix': np.array(rotation_values, dtype=float).reshape(3, 3),
+        'translation_vector': np.array(translation_values, dtype=float),
+        'min_bound': np.array(min_bound_values, dtype=float),
+        'max_bound': np.array(max_bound_values, dtype=float),
+        'voxel_size': voxel_size
+    }
+
 
 def save_visualization_files(pcd_data, rotation_matrix, translation_vector, min_bound, max_bound, output_dir):
     """Save visualization files for the first scene with bounding box"""
@@ -713,121 +775,167 @@ def save_visualization_files(pcd_data, rotation_matrix, translation_vector, min_
 def main():
     # File paths
     ground_ply_path = "output/ground.ply"
-    output_dir = "output"
-    
-    print("Step 1: Reading ground PLY file and calculating normal...")
-    try:
-        ground_normal = -read_ply_ground(ground_ply_path)
-        print(f"Ground normal: {ground_normal}")
-    except Exception as e:
-        print(f"Failed to read ground file: {e}")
-        return
-    
-    print("\nStep 2: Computing coordinate transformation matrix...")
-    # Target Z-axis direction
-    target_z = np.array([0, 0, 1])
-    
-    # Compute rotation matrix
-    rotation_matrix = compute_rotation_matrix(ground_normal, target_z)
-    print(f"Rotation matrix:")
-    print(rotation_matrix)
-    
+    output_dir = "output/real_data/train"
+    xml_output_path = Path(output_dir) / "transformation.xml"
+
+    voxel_size = 0.0075
+    rotation_matrix = None
+    total_translation = None
+    final_min_bound = None
+    final_max_bound = None
+    BBOX_MIN = None
+    BBOX_MAX = None
+
+    if xml_output_path.exists():
+        print("Found existing transformation.xml. Loading stored transformation...")
+        try:
+            transform_data = load_transformation_xml(xml_output_path)
+            rotation_matrix = transform_data['rotation_matrix']
+            total_translation = transform_data['translation_vector']
+            BBOX_MIN = transform_data['min_bound']
+            BBOX_MAX = transform_data['max_bound']
+            voxel_size = transform_data['voxel_size']
+            print("Loaded rotation matrix and translation vector from transformation.xml")
+        except Exception as e:
+            print(f"Failed to load transformation.xml: {e}")
+            print("Falling back to recomputing transformation parameters...")
+            rotation_matrix = None
+            total_translation = None
+            BBOX_MIN = None
+            BBOX_MAX = None
+
+    if rotation_matrix is None or total_translation is None:
+        print("Step 1: Reading ground PLY file and calculating normal...")
+        try:
+            ground_normal = -read_ply_ground(ground_ply_path)
+            print(f"Ground normal: {ground_normal}")
+        except Exception as e:
+            print(f"Failed to read ground file: {e}")
+            return
+
+        print("\nStep 2: Computing coordinate transformation matrix...")
+        target_z = np.array([0, 0, 1])
+        rotation_matrix = compute_rotation_matrix(ground_normal, target_z)
+        print("Rotation matrix:")
+        print(rotation_matrix)
+
+        BBOX_MIN = np.array([-0.3, -0.2, 0])
+        BBOX_MAX = np.array([0.3, 0.2, 0.25])
+
     print("\nStep 3: Finding and loading all _objects_merged point cloud files...")
     pattern = "*_objects_merged.ply"
     merged_files = list(Path(output_dir).glob(pattern))
     print(f"Found {len(merged_files)} files:")
     for f in merged_files:
         print(f"  - {f}")
-    
-    # Load all point clouds once
+
     loaded_pcds = load_all_pointclouds(merged_files)
     print(f"Successfully loaded {len(loaded_pcds)} point clouds")
-    
-    print("\nStep 4: Computing global bounding box for all scenes...")
-    try:
-        # First, compute bbox after rotation only to determine translation
-        temp_min_bound, temp_max_bound = compute_global_bbox_from_loaded(loaded_pcds, rotation_matrix)
-        print(f"Global bounding box after rotation:")
-        print(f"  Min: {temp_min_bound}")
-        print(f"  Max: {temp_max_bound}")
-        
-        # Calculate translation to center the bbox bottom plane at origin
-        bbox_center_xy = (temp_min_bound[:2] + temp_max_bound[:2]) / 2
-        bbox_min_z = temp_min_bound[2]
-        translation_vector = np.array([-bbox_center_xy[0], -bbox_center_xy[1], -bbox_min_z])
-        print(f"Translation vector: {translation_vector}")
-        
-        # Now compute the final bbox after both rotation and translation
-        final_min_bound, final_max_bound = compute_global_bbox_after_transform_loaded(loaded_pcds, rotation_matrix, translation_vector)
-        print(f"Final bounding box after full transformation:")
-        print(f"  Min: {final_min_bound}")
-        print(f"  Max: {final_max_bound}")
-        
-        # Apply final adjustment to move bottom plane to z=0 and center XY
-        final_bbox_center_xy = (final_min_bound[:2] + final_max_bound[:2]) / 2
-        z_offset = -final_min_bound[2]
-        final_adjustment = np.array([-final_bbox_center_xy[0], -final_bbox_center_xy[1], z_offset])
-        
-        # Update final bounds
-        final_min_bound += final_adjustment
-        final_max_bound += final_adjustment
-        
-        # Update total translation vector
-        total_translation = translation_vector + final_adjustment
-        
-        print(f"Final adjustment: {final_adjustment}")
-        print(f"Total translation vector: {total_translation}")
-        print(f"Adjusted final bounding box:")
-        print(f"  Min: {final_min_bound}")
-        print(f"  Max: {final_max_bound}")
-        
-        # Validate that final bounds are within the predefined bbox limits
-        BBOX_MIN = np.array([-0.3, -0.2, 0])    # bbox minimum coordinates (Z-up)
-        BBOX_MAX = np.array([0.3, 0.2, 0.25])     # bbox maximum coordinates (Z-up)
-        
-        if not np.all(final_min_bound >= BBOX_MIN):
-            print(f"ERROR: final_min_bound {final_min_bound} exceeds BBOX_MIN {BBOX_MIN}")
-            print("Point cloud bounds are outside the allowed range!")
-            return
-        
-        if not np.all(final_max_bound <= BBOX_MAX):
-            print(f"ERROR: final_max_bound {final_max_bound} exceeds BBOX_MAX {BBOX_MAX}")
-            print("Point cloud bounds are outside the allowed range!")
-            return
-        
-        print("✓ Final bounds are within the allowed bbox range")
-        
-    except Exception as e:
-        print(f"Failed to compute bounding box: {e}")
-        return
-    
 
-    # Save transformation data to XML (with final bbox)
-    voxel_size = 0.0075  # 1cm resolution
-    xml_output_path = Path(output_dir) / "transformation.xml"
-    save_transformation_xml(rotation_matrix, total_translation, BBOX_MIN, BBOX_MAX, voxel_size, str(xml_output_path))
-    
+    if rotation_matrix is None:
+        print("No valid rotation matrix available. Aborting.")
+        return
+
+    if total_translation is None:
+        print("\nStep 4: Computing global bounding box for all scenes...")
+        try:
+            temp_min_bound, temp_max_bound = compute_global_bbox_from_loaded(loaded_pcds, rotation_matrix)
+            print("Global bounding box after rotation:")
+            print(f"  Min: {temp_min_bound}")
+            print(f"  Max: {temp_max_bound}")
+
+            bbox_center_xy = (temp_min_bound[:2] + temp_max_bound[:2]) / 2
+            bbox_min_z = temp_min_bound[2]
+            translation_vector = np.array([-bbox_center_xy[0], -bbox_center_xy[1], -bbox_min_z])
+            print(f"Translation vector: {translation_vector}")
+
+            final_min_bound, final_max_bound = compute_global_bbox_after_transform_loaded(loaded_pcds, rotation_matrix, translation_vector)
+            print("Final bounding box after full transformation:")
+            print(f"  Min: {final_min_bound}")
+            print(f"  Max: {final_max_bound}")
+
+            final_bbox_center_xy = (final_min_bound[:2] + final_max_bound[:2]) / 2
+            z_offset = -final_min_bound[2]
+            final_adjustment = np.array([-final_bbox_center_xy[0], -final_bbox_center_xy[1], z_offset])
+
+            final_min_bound += final_adjustment
+            final_max_bound += final_adjustment
+
+            total_translation = translation_vector + final_adjustment
+
+            print(f"Final adjustment: {final_adjustment}")
+            print(f"Total translation vector: {total_translation}")
+            print("Adjusted final bounding box:")
+            print(f"  Min: {final_min_bound}")
+            print(f"  Max: {final_max_bound}")
+
+            if not np.all(final_min_bound >= BBOX_MIN):
+                print(f"ERROR: final_min_bound {final_min_bound} exceeds BBOX_MIN {BBOX_MIN}")
+                print("Point cloud bounds are outside the allowed range!")
+                return
+
+            if not np.all(final_max_bound <= BBOX_MAX):
+                print(f"ERROR: final_max_bound {final_max_bound} exceeds BBOX_MAX {BBOX_MAX}")
+                print("Point cloud bounds are outside the allowed range!")
+                return
+
+            print("✓ Final bounds are within the allowed bbox range")
+
+            save_transformation_xml(rotation_matrix, total_translation, BBOX_MIN, BBOX_MAX, voxel_size, str(xml_output_path))
+
+        except Exception as e:
+            print(f"Failed to compute bounding box: {e}")
+            return
+    else:
+        print("\nUsing transformation loaded from XML. Skipping recomputation of global bounding box.")
+        try:
+            final_min_bound, final_max_bound = compute_global_bbox_after_transform_loaded(
+                loaded_pcds, rotation_matrix, total_translation)
+            print("Computed bounding box using stored transformation:")
+            print(f"  Min: {final_min_bound}")
+            print(f"  Max: {final_max_bound}")
+        except Exception as e:
+            print(f"Failed to evaluate bounding box with stored transformation: {e}")
+            final_min_bound = BBOX_MIN
+            final_max_bound = BBOX_MAX
+
     print("\nStep 5: Applying coordinate transform and translation to all point cloud files...")
     success_count = 0
     for pcd_data in loaded_pcds:
-        # Generate output filename
         input_file = pcd_data['file_path']
         output_filename = input_file.stem + "_aligned.ply"
         output_path = input_file.parent / output_filename
-        
+
         print(f"\nProcessing: {input_file.name}")
         if transform_and_save_pointcloud(pcd_data, str(output_path), rotation_matrix, total_translation, voxel_size, BBOX_MIN, BBOX_MAX):
             success_count += 1
-    
+
     print(f"\nComplete! Successfully processed {success_count}/{len(loaded_pcds)} files")
     print("Transformed files saved as *_aligned.ply")
-    print(f"All point clouds are now aligned with Z-axis pointing up and centered at origin")
-    
-    # Save visualization files for first scene with bounding box
-    if loaded_pcds:
-        print("\nStep 6: Saving visualization files for first scene with global bounding box...")
-        save_visualization_files(loaded_pcds[0], rotation_matrix, total_translation, 
+    print("All point clouds are now aligned with Z-axis pointing up and centered at origin")
+
+    scene_pattern = "*_scene.ply"
+    scene_files = sorted(Path(output_dir).glob(scene_pattern))
+    if total_translation is None or BBOX_MIN is None or BBOX_MAX is None:
+        print("\nStep 6: Skipping scene alignment because transformation parameters are unavailable.")
+    elif scene_files:
+        print("\nStep 6: Applying transformation to scene point cloud files...")
+        scene_success = 0
+        for scene_path in scene_files:
+            print(f"\nProcessing scene: {scene_path.name}")
+            if transform_and_save_scene_pointcloud(scene_path, rotation_matrix, total_translation, BBOX_MIN, BBOX_MAX):
+                scene_success += 1
+        print(f"\nScene alignment complete: {scene_success}/{len(scene_files)} files aligned")
+    else:
+        print("\nStep 6: No *_scene.ply files found. Skipping scene alignment.")
+
+    if loaded_pcds and final_min_bound is not None and final_max_bound is not None:
+        print("\nStep 7: Saving visualization files for first scene with global bounding box...")
+        save_visualization_files(loaded_pcds[0], rotation_matrix, total_translation,
                                 final_min_bound, final_max_bound, output_dir)
+    elif loaded_pcds:
+        print("\nStep 7: Skipping visualization export because final bounds are unavailable.")
+
 
 if __name__ == "__main__":
     main()

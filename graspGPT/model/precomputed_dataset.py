@@ -14,11 +14,11 @@ import random
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
     from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
-    from .core import generate_amodal_sequence
+    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
     from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
-    from core import generate_amodal_sequence
+    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 
 
 
@@ -277,9 +277,9 @@ class PrecomputedDataset(Dataset):
 
         tokens = self.filter_grasp_tokens(tokens)
 
-        if random.random() < 0.5:
-            # 50%概率下进行amodal数据增强
-            tokens = generate_amodal_sequence(tokens,self.volume_dims)
+        if random.random() < 0.7: # 数据增强
+            tokens = generate_seg_sequence(tokens,self.volume_dims)
+            tokens = maybe_drop_amodal_or_unseg(tokens)
 
         tokens = encode_sequence(tokens, self.token_mapping)
 
