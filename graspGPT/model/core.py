@@ -655,7 +655,10 @@ def maybe_drop_amodal_or_unseg(
         choices: List[str] = ['noop']
         if amodal_present:
             choices.append('drop_amodal')
+            choices.append('drop_amodal')
         if unseg_present:
+            choices.append('drop_unseg')
+            choices.append('drop_unseg')
             choices.append('drop_unseg')
 
         action = randomizer.choice(choices) if len(choices) > 1 else 'noop'
