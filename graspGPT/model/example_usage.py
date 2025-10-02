@@ -108,12 +108,12 @@ def test_single_batch():
     
     # Test forward pass
     batch = next(iter(dataloader))
-    x_batch, y_batch, att_batch = batch
+    x_batch, y_batch, loss_mask_batch = batch
     
-    print(f"Batch shapes: x={x_batch.shape}, y={y_batch.shape}, att={att_batch.shape}")
+    print(f"Batch shapes: x={x_batch.shape}, y={y_batch.shape}, loss_mask={loss_mask_batch.shape}")
     
     with torch.no_grad():
-        logits_heads, loss = model(x_batch, targets=y_batch, attention_mask=att_batch)
+        logits_heads, loss = model(x_batch, targets=y_batch, attention_mask=None, loss_mask=loss_mask_batch)
         print(f"Forward pass successful!")
         print(f"Logits shape: {logits_heads[0].shape}")
         print(f"Loss: {loss.item() if loss is not None else 'None'}")

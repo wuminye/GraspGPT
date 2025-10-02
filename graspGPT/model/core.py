@@ -23,6 +23,7 @@ from .parser_and_serializer import (
     Serializer,
     UNSEG,
     CB,
+    GB,
     Seq,
 )
 
@@ -126,7 +127,7 @@ def save_voxels(sequence: list, file_path: str):
 def generate_amodal_sequence(
     token_sequence: List[Union[str, Tuple[int, int, int]]],
     voxel_dims: Tuple[Union[int, float], Union[int, float], Union[int, float]],
-    camera_resolution: Tuple[int, int] = (192, 192),
+    camera_resolution: Tuple[int, int] = (256, 256),
     rng: Optional[random.Random] = None,
     return_details: bool = False,
     fov_y_degrees: float = 80.0,
@@ -211,7 +212,7 @@ def generate_amodal_sequence(
         if radius <= 1e-6:
             raise ValueError("voxel_dims 的尺寸过小，无法确定相机半径")
 
-        min_z_value = 0.4
+        min_z_value = 40
         z_requirement = (min_z_value - target_point[2]) / radius
         if z_requirement >= 1.0:
             raise ValueError("无法满足相机 Z 轴阈值要求")
@@ -385,7 +386,7 @@ def generate_amodal_sequence(
     depth_map = _smooth_depth_map(depth_map)
 
     # 由深度图反投影生成 incomplete 视角的体素点云
-    drop_probability = 0.2
+    drop_probability = 0.05
     noise_magnitude = 0
 
     def _clamp(value: int, upper_bound: int) -> int:
@@ -504,7 +505,7 @@ def generate_amodal_sequence(
             'dtype': 'float',
         }
 
-    
+    '''
     if cv2 is not None and np is not None:
         depth_for_save = np.asarray(depth_image_numeric, dtype=float)
         finite_mask = np.isfinite(depth_for_save)
@@ -520,6 +521,8 @@ def generate_amodal_sequence(
         depth_vis = (np.clip(depth_norm, 0.0, 1.0) * 255).astype(np.uint8)
         cv2.imwrite('sd.jpg', depth_vis)
     #import pdb; pdb.set_trace()
+    '''
+    
     
 
     projection_details: Dict[str, Any] = {
@@ -571,11 +574,64 @@ def generate_amodal_sequence(
         return serialized, projection_details
     return serialized
 
+def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]]):
+    """将 SCENE 聚合为单个 'unlabel' 点云，并把原始数据迁移到 UNSEG。"""
 
-def generate_seg_sequence(
+    parser = Parser(token_sequence)
+    original_seq = parser.parse()
+
+    original_scene = next((item for item in original_seq.items if isinstance(item, Scene)), None)
+    if original_scene is None:
+        raise ValueError("输入的 token 序列缺少 SCENE 段")
+
+    def _clone_cb(cb: CB) -> CB:
+        return CB(coord=cb.coord, serial=cb.serial)
+
+    def _clone_sb(sb: SB) -> SB:
+        return SB(tag=sb.tag, cbs=[_clone_cb(cb) for cb in sb.cbs])
+
+    unique_serials: Dict[Tuple[int, int, int], Optional[str]] = {}
+    for sb in original_scene.sbs:
+        for cb in sb.cbs:
+            coord = cb.coord
+            serial = cb.serial
+            if coord not in unique_serials:
+                unique_serials[coord] = serial
+            elif unique_serials[coord] is None and serial is not None:
+                unique_serials[coord] = serial
+
+    if not unique_serials:
+        raise ValueError("SCENE 段中没有可用的点云数据")
+
+    merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys())]
+    new_scene = Scene(sbs=[SB(tag='unlabel', cbs=merged_cbs)])
+
+    scene_unseg = UNSEG(sbs=[_clone_sb(sb) for sb in original_scene.sbs])
+
+    new_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = [new_scene, scene_unseg]
+
+    for item in original_seq.items:
+        if isinstance(item, Scene):
+            continue
+        if isinstance(item, AMODAL):
+            new_items.append(AMODAL(sb=_clone_sb(item.sb)))
+        elif isinstance(item, UNSEG):
+            new_items.append(UNSEG(sbs=[_clone_sb(sb) for sb in item.sbs]))
+        elif isinstance(item, GRASP):
+            new_gbs: List[GB] = []
+            for gb in item.gbs:
+                cloned_cbs = [_clone_cb(cb) for cb in gb.cbs]
+                new_gbs.append(GB(tag='unlabel', cbs=cloned_cbs))
+            new_items.append(GRASP(gbs=new_gbs))
+        else:
+            new_items.append(item)
+
+    return Serializer.serialize(Seq(items=new_items))
+
+def generate_amodal_seg_sequence(
     token_sequence: List[Union[str, Tuple[int, int, int]]],
     voxel_dims: Tuple[Union[int, float], Union[int, float], Union[int, float]],
-    camera_resolution: Tuple[int, int] = (192, 192),
+    camera_resolution: Tuple[int, int] = (256, 256),
     rng: Optional[random.Random] = None,
     return_details: bool = False,
     fov_y_degrees: float = 80.0,

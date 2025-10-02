@@ -294,7 +294,26 @@ class graspGPT(nn.Module):
             
             return optimizer_groups
 
-    def forward(self, idx, targets=None, attention_mask=None):
+    @staticmethod
+    def _compute_loss(logits, targets, loss_mask=None):
+        target_tokens = targets[..., 0].long().reshape(-1)
+        logits_flat = logits.reshape(-1, logits.size(-1))
+
+        if loss_mask is not None:
+            mask = loss_mask.reshape(-1).to(logits.device)
+            if mask.dtype != torch.bool:
+                mask = mask > 0
+            valid = mask & (target_tokens != -1)
+            if valid.any():
+                return F.cross_entropy(logits_flat[valid], target_tokens[valid])
+
+        non_padding = target_tokens != -1
+        if non_padding.any():
+            return F.cross_entropy(logits_flat[non_padding], target_tokens[non_padding])
+
+        return logits_flat.sum() * 0.0
+
+    def forward(self, idx, targets=None, attention_mask=None, loss_mask=None):
         """
         Args:
             idx: input tensor of shape (batch_size, sequence_length, num_features)
@@ -320,18 +339,6 @@ class graspGPT(nn.Module):
                 return_dict=True
             )
             logits = outputs.logits
-            loss = None
-            
-            # Create list of logits for multi-head output
-            logits_heads = [logits]
-
-            loss = None
-            if targets is not None:
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), 
-                                     targets[..., 0].long().reshape(-1), 
-                                     ignore_index=-1)
-            
-            return logits_heads, loss
         else:
             # Original transformers version
             b, t, g = idx.size()
@@ -354,18 +361,13 @@ class graspGPT(nn.Module):
             
             # Get logits from the model
             logits = outputs.logits
-            
-            # Create list of logits for multi-head output
-            logits_heads = [logits]
-            
-            # Calculate loss if targets provided
-            loss = None
-            if targets is not None:
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), 
-                                     targets[..., 0].long().reshape(-1), 
-                                     ignore_index=-1)
 
-            return logits_heads, loss
+        logits_heads = [logits]
+        loss = None
+        if targets is not None:
+            loss = self._compute_loss(logits, targets, loss_mask=loss_mask)
+
+        return logits_heads, loss
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None, end_token=None):

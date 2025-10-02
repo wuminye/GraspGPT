@@ -11,6 +11,72 @@ from torch.utils.data.dataloader import DataLoader
 from .utils import CfgNode as CN
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ExponentialLR
+from .token_manager import get_token_manager
+
+
+_TOKEN_MANAGER = get_token_manager()
+_TOKEN_TO_ID = {token: idx for idx, token in enumerate(_TOKEN_MANAGER.all_tokens)}
+_COORDINATE_START_ID = len(_TOKEN_MANAGER.all_tokens)
+_SCENE_TOKEN_ID = _TOKEN_TO_ID.get('scene')
+_SCENE_TERMINATOR_IDS = {
+    _TOKEN_TO_ID.get(token)
+    for token in ('segment', 'amodal', 'detectgrasp', 'end')
+    if token in _TOKEN_TO_ID
+}
+_SHAPE_TAG_ID_TO_NAME = {
+    _TOKEN_TO_ID[tag]: tag
+    for tag in _TOKEN_MANAGER.shape_tags
+    if tag in _TOKEN_TO_ID
+}
+_SERIAL_TOKEN_IDS = {
+    _TOKEN_TO_ID[token]
+    for token in _TOKEN_MANAGER.serial_tokens
+    if token in _TOKEN_TO_ID
+}
+_INCOMPLETE_TOKEN_ID = _TOKEN_TO_ID.get('incomplete')
+
+
+def _build_incomplete_loss_mask(token_tensor: torch.Tensor) -> torch.Tensor:
+    """Build a loss mask that keeps SCENE/SB tokens tagged as 'incomplete'."""
+    flat_tokens = token_tensor.view(-1).tolist()
+    mask = torch.zeros(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
+
+    if _SCENE_TOKEN_ID is None or _INCOMPLETE_TOKEN_ID is None:
+        return mask
+
+    in_scene = False
+    current_sb_tag = None
+
+    for idx, token_id in enumerate(flat_tokens):
+        if token_id == _SCENE_TOKEN_ID:
+            in_scene = True
+            current_sb_tag = None
+            continue
+
+        if not in_scene:
+            continue
+
+        if token_id in _SCENE_TERMINATOR_IDS:
+            in_scene = False
+            current_sb_tag = None
+            continue
+
+        if token_id in _SHAPE_TAG_ID_TO_NAME:
+            current_sb_tag = _SHAPE_TAG_ID_TO_NAME[token_id]
+            if current_sb_tag == 'incomplete':
+                mask[idx] = 1.0
+            continue
+
+        if token_id in _SERIAL_TOKEN_IDS or token_id >= _COORDINATE_START_ID:
+            if current_sb_tag == 'incomplete':
+                mask[idx] = 1.0
+            continue
+
+        # Other tokens within SCENE (unlikely) are ignored unless we're inside an incomplete SB
+        if current_sb_tag == 'incomplete':
+            mask[idx] = 1.0
+
+    return mask
 
 
 
@@ -23,12 +89,14 @@ def pad_collate(batch):
         x: (b x t x g)
         y: (b x t x g)
     """
-    tokens, sequence_length,_ = zip(*batch)
+    tokens, sequence_length, _ = zip(*batch)
     max_length = max(sequence_length)
 
     chunks = []
+    loss_masks = []
     for i in range(len(tokens)):
         chunk = tokens[i]
+        mask = _build_incomplete_loss_mask(chunk)
         
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
         if chunk.shape[0] < max_length:
@@ -37,22 +105,27 @@ def pad_collate(batch):
             pad_shape = [pad_size] + list(chunk.shape[1:])
             padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
             chunk = torch.cat([chunk, padding], dim=0)
+
+            mask_padding = torch.zeros(pad_size, dtype=mask.dtype, device=mask.device)
+            mask = torch.cat([mask, mask_padding], dim=0)
         
 
-        
         chunks.append(chunk)
+        loss_masks.append(mask)
 
     chunks = torch.stack(chunks, dim=0)  # Shape: [num_chunks, max_sequence_length, ...]
+    loss_masks = torch.stack(loss_masks, dim=0)
 
     x_batch = chunks[:, :-1, ...]  # Input tokens
     y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
-    #att_batch = (x_batch!=-1)
-    att_batch = None
+    loss_mask_batch = loss_masks[:, 1:]
+    non_padding = (y_batch[..., 0] != -1).float()
+    loss_mask_batch = loss_mask_batch * non_padding
 
     x_batch[x_batch<0]=0
 
 
-    return x_batch, y_batch, att_batch
+    return x_batch, y_batch, loss_mask_batch
 
 
 
@@ -79,10 +152,12 @@ def pad_collate_packed(batch):
     # Split tokens into chunks of max_sequence_length
     seq_len = tokens.shape[0]
     chunks = []
-    
+    loss_masks = []
+
     for i in range(0, seq_len, max_sequence_length):
         chunk = tokens[i:i + max_sequence_length]
-        
+        mask = _build_incomplete_loss_mask(chunk)
+
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
         if chunk.shape[0] < max_sequence_length:
             pad_size = max_sequence_length - chunk.shape[0]
@@ -90,20 +165,26 @@ def pad_collate_packed(batch):
             pad_shape = [pad_size] + list(chunk.shape[1:])
             padding = torch.full(pad_shape, -1, dtype=chunk.dtype, device=chunk.device)
             chunk = torch.cat([chunk, padding], dim=0)
-        
+
+            mask_padding = torch.zeros(pad_size, dtype=mask.dtype, device=mask.device)
+            mask = torch.cat([mask, mask_padding], dim=0)
+
         chunks.append(chunk)
+        loss_masks.append(mask)
 
     chunks = torch.stack(chunks, dim=0)  # Shape: [num_chunks, max_sequence_length, ...]
+    loss_masks = torch.stack(loss_masks, dim=0)
 
     x_batch = chunks[:, :-1, ...]  # Input tokens
     y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
-    #att_batch = (x_batch!=-1)
-    att_batch = None
+    loss_mask_batch = loss_masks[:, 1:]
+    non_padding = (y_batch[..., 0] != -1).float()
+    loss_mask_batch = loss_mask_batch * non_padding
 
     x_batch[x_batch<0]=0
 
 
-    return x_batch, y_batch, att_batch
+    return x_batch, y_batch, loss_mask_batch
 
 class Trainer:
 
@@ -216,9 +297,9 @@ class Trainer:
                 data_iter = iter(train_loader)
                 batch = next(data_iter)
             batch = [t.cuda(non_blocking=True) if t is not None and torch.is_tensor(t) else t for t in batch]
-            x, y, att = batch  
+            x, y, loss_mask = batch  
 
-            logits, self.loss = model(x, targets=y, attention_mask=att)
+            logits, self.loss = model(x, targets=y, attention_mask=None, loss_mask=loss_mask)
             model.zero_grad(set_to_none=True)
             self.loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)

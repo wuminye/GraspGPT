@@ -389,16 +389,16 @@ def create_deepspeed_config(config):
 
 def training_step(model_engine, batch, config):
     """Single training step"""
-    x, y, att = batch
-    
+    x, y, loss_mask = batch
+
     # Move to device (DeepSpeed handles this automatically)
     x = x.to(model_engine.local_rank, non_blocking=True)
     y = y.to(model_engine.local_rank, non_blocking=True)
-    if att is not None:
-        att = att.to(model_engine.local_rank, non_blocking=True)
-    
+    if loss_mask is not None:
+        loss_mask = loss_mask.to(model_engine.local_rank, non_blocking=True)
+
     # Forward pass
-    logits, loss = model_engine(x, targets=y, attention_mask=att)
+    logits, loss = model_engine(x, targets=y, attention_mask=None, loss_mask=loss_mask)
     
     # Backward pass
     model_engine.backward(loss)

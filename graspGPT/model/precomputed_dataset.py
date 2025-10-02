@@ -277,9 +277,12 @@ class PrecomputedDataset(Dataset):
 
         tokens = self.filter_grasp_tokens(tokens)
 
-        if random.random() < 0.7: # 数据增强
-            tokens = generate_seg_sequence(tokens,self.volume_dims)
-            tokens = maybe_drop_amodal_or_unseg(tokens)
+        rng = random.random()
+        if rng < 0.35: # 数据增强
+            tokens = generate_seg_sequence(tokens)
+        elif rng < 0.7:
+            tokens = generate_amodal_sequence(tokens,self.volume_dims)
+        
 
         tokens = encode_sequence(tokens, self.token_mapping)
 
