@@ -391,6 +391,8 @@ def training_step(model_engine, batch, config):
     """Single training step"""
     x, y, loss_mask = batch
 
+    loss_mask = None # Not used currently !!!!!!!!!!!!!!!!!!!
+
     # Move to device (DeepSpeed handles this automatically)
     x = x.to(model_engine.local_rank, non_blocking=True)
     y = y.to(model_engine.local_rank, non_blocking=True)
