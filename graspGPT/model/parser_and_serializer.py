@@ -287,7 +287,13 @@ class Parser:
         self.expect('detectgrasp')
         gbs: List[GB] = []
         while self.current() == 'grasp':
-            gbs.append(self._parse_gb())
+            try:
+                gbs.append(self._parse_gb())
+            except ParseError as e:
+                print(f"ParseError while parsing GB: {e}")
+                # Stop parsing GBs and discard the remaining tokens in this sequence.
+                self._consume_until_end()
+                break
         return GRASP(gbs)
 
     # GB --------------------------------------------------------------------

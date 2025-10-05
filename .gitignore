@@ -17,3 +17,5 @@
 /graspGPT/model/csrc/parser_cpp.egg-info
 *.o
 *.jpg
+/tests/__pycache__
+/tests
