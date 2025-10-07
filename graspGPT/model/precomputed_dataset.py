@@ -13,11 +13,11 @@ import random
 
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
-    from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
     from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
-    from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp
+    from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
     from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 
 
@@ -58,6 +58,8 @@ class PrecomputedDataset(Dataset):
     
     def _load_precomputed_data(self) -> List[Dict]:
         """Load all precomputed data files from directory"""
+
+        
         if self.data_path.is_file():
             # Single file
             pth_files = [self.data_path]
@@ -208,11 +210,16 @@ class PrecomputedDataset(Dataset):
             # Step 2: 收集所有SB的TAG
             sb_tags = set()
             sb_list = []
+
+            other_items = []
             for item in ast.items:
                 if isinstance(item, Scene):
                     sb_list.extend(item.sbs)
                 elif isinstance(item, SB):
                     sb_list.append(item)
+                elif isinstance(item, AMODAL) or isinstance(item, UNSEG):
+                    other_items.append(item)
+
 
             for sb in sb_list:
                 sb_tags.add(sb.tag)
@@ -228,27 +235,34 @@ class PrecomputedDataset(Dataset):
                     # 统计每个TAG的GB数量
                     tag_count = {}
                     filtered_gbs = []
-                    for gb in item.gbs:
-                        # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
-                        if gb.tag in sb_tags:
-                            current_count = tag_count.get(gb.tag, 0)
-                            if current_count < 20:
-                                filtered_gbs.append(gb)
-                                tag_count[gb.tag] = current_count + 1
+                    if len(sb_tags)>1:
+                        for gb in item.gbs:
+                            # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
+                            if gb.tag in sb_tags:
+                                current_count = tag_count.get(gb.tag, 0)
+                                if current_count < 100:
+                                    filtered_gbs.append(gb)
+                                    tag_count[gb.tag] = current_count + 1
+                        
+                    else:
+                        filtered_gbs = item.gbs
 
                     random.shuffle(filtered_gbs)
+                    if len(filtered_gbs)>700:
+                        filtered_gbs = filtered_gbs[:700]
                     # 更新GRASP的GB列表
                     item.gbs = filtered_gbs
                     grasp_block = item
             
             items = []
             items.append(Scene(sbs=sb_list))
+            items += other_items
             if grasp_block is not None:
                 items.append(grasp_block)
 
             # Step 4: 序列化AST回tokens
             filtered_tokens = Serializer.serialize(Seq(items=items))
-            return filtered_tokens
+            return filtered_tokens, len(other_items)
             
         except Exception as e:
             print(f"Error in filter_grasp_tokens: {e}")
@@ -271,11 +285,10 @@ class PrecomputedDataset(Dataset):
 
         tokens = decode_sequence(tokens, self.token_mapping)
 
-    
-    
+
     
 
-        tokens = self.filter_grasp_tokens(tokens)
+        tokens, num_others = self.filter_grasp_tokens(tokens)
 
         '''
         rng = random.random()
@@ -284,12 +297,14 @@ class PrecomputedDataset(Dataset):
         elif rng < 0.7:
             tokens = generate_amodal_sequence(tokens,self.volume_dims)
         '''
-        tokens = generate_amodal_sequence(tokens,self.volume_dims)
+
+        if num_others==0:
+            tokens = generate_amodal_sequence(tokens,self.volume_dims)
         
 
         tokens = encode_sequence(tokens, self.token_mapping)
 
-        tokens = tokens[:-1]  # Remove the final EOS token for training
+        #tokens = tokens[:-1]  # Remove the final EOS token for training
 
         seq_len = len(tokens)
 

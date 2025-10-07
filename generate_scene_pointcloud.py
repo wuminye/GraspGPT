@@ -63,8 +63,12 @@ def main():
     # 初始化 API
     g = GraspNet(args.root, camera=args.camera, split="custom", sceneIds=[args.scene_id])  # split 对 loadSceneModel/PointCloud 影响不大
 
+    camera_poses = np.load(os.path.join(g.root, 'scenes', 'scene_%04d' % args.scene_id, args.camera, 'camera_poses.npy'))
+    camera_pose = camera_poses[args.ann_id]
+    align_mat = np.load(os.path.join(g.root, 'scenes', 'scene_%04d' % args.scene_id, args.camera, 'cam0_wrt_table.npy'))
+    camera_pose = align_mat.dot(camera_pose)
 
-   
+
 
     scene_id = args.scene_id
     ann_id = args.ann_id
@@ -101,6 +105,9 @@ def main():
     print(f"[保存完成] 场景点云：{scene_out_path}")
 
     _6d_grasp = g.loadGrasp(sceneId = scene_id, annId = ann_id, format = '6d', camera = 'kinect', fric_coef_thresh = 0.2)
+
+    _6d_grasp = _6d_grasp.transform(camera_pose)  # 将抓取位姿转换到场景坐标系
+
 
     points_grasp = _6d_grasp.random_sample(numGrasp = 20).to_open3d_geometry_list()  # 采样20个抓取，转换为open3d格式点云
 

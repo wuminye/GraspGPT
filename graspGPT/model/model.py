@@ -472,7 +472,7 @@ class graspGPT(nn.Module):
                 intermediate_size=4 * config.n_embd,
                 num_hidden_layers=config.n_layer,
                 num_attention_heads=config.n_head,
-                num_key_value_heads=config.n_head,  # Set key-value heads equal to attention heads
+                num_key_value_heads=4,  # Set key-value heads equal to attention heads
                 max_position_embeddings=config.block_size,
                 rms_norm_eps=1e-6,
                 tie_word_embeddings=True,
@@ -864,6 +864,76 @@ class graspGPT(nn.Module):
             expanded = generated.unsqueeze(-1).expand(-1, -1, idx.size(-1))
             return expanded
         return generated.unsqueeze(-1)
+
+    @torch.no_grad()
+    def generate_ori(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None, end_token=None, **kwargs):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        use_rope = getattr(self.config, 'use_rope', True)
+        
+        if use_rope:
+            # RoPE version
+            input_ids = idx[..., 0].long() if idx.dim() > 2 else idx.long()
+            
+            # Prepare generation config for transformers
+            generation_config = {
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "return_dict_in_generate": True,
+                "output_scores": True,
+                "use_cache": True
+            }
+            
+            # Add optional parameters only if they're not None
+            if top_k is not None:
+                generation_config["top_k"] = top_k
+            if end_token is not None:
+                generation_config["eos_token_id"] = end_token
+                generation_config["pad_token_id"] = 0
+            
+            # Use transformers generate method
+            generated = self.model.generate(
+                input_ids=input_ids,
+                **generation_config
+            )
+            
+            generated_ids = generated.sequences
+        else:
+            # Original transformers version
+            input_ids = idx[..., 0].long() if idx.dim() > 2 else idx.long()
+            
+            generation_config = {
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "top_k": top_k,
+                "pad_token_id": end_token,
+                "eos_token_id": end_token,
+                "return_dict_in_generate": True,
+                "output_scores": True,
+                "use_cache": True
+            }
+            
+            generated = self.model.generate(
+                input_ids=input_ids,
+                **generation_config
+            )
+            
+            generated_ids = generated.sequences
+        
+        # Always return in the expected format: (batch_size, sequence_length, num_features)
+        # Add the feature dimension to match the original input format
+        if idx.dim() > 2:
+            # If input has multiple features, expand to match
+            expanded = generated_ids.unsqueeze(-1).expand(-1, -1, idx.size(-1))
+            return expanded
+        else:
+            # If input is 2D, add a single feature dimension
+            return generated_ids.unsqueeze(-1)
 
     def save_model(self, path):
         """Save model state dict to file"""

@@ -4,6 +4,7 @@ from tqdm import tqdm
 import os
 import open3d as o3d
 import copy
+import itertools
 
 GRASP_ARRAY_LEN = 17
 
@@ -208,71 +209,83 @@ def interior_points_to_gripper_params(left_interior, right_interior, bottom_cent
     finger_width = 0.004
     depth_base = 0.02
     height = 0.004
-    
-    # First, establish coordinate system from the three points
-    # Vector from left to right finger (should align with gripper Y-axis)
-    left_to_right = right_interior - left_interior
-    y_axis = left_to_right / np.linalg.norm(left_to_right)
-    
-    # Center of the two finger points
-    fingers_center = (left_interior + right_interior) / 2
-    
-    # Vector from bottom to fingers center (should align with gripper X-axis)  
-    bottom_to_fingers = fingers_center - bottom_center
-    x_axis = bottom_to_fingers / np.linalg.norm(bottom_to_fingers)
-    
-    # Z-axis from cross product
-    z_axis = np.cross(x_axis, y_axis)
-    z_axis = z_axis / np.linalg.norm(z_axis)
-    
-    # Recompute x_axis to ensure orthogonality
-    x_axis = np.cross(y_axis, z_axis)
-    
-    R = np.column_stack([x_axis, y_axis, z_axis])
-    
-    # Transform points to local gripper coordinates
-    # We'll use left_interior and bottom_center to solve for width and depth
-    
-    # From gripper_params_to_interior_points, we know:
-    # left_interior = center + R @ (offset_left + arm_bbox_center)
-    # bottom_center = center + R @ (offset_bottom + bottom_bbox_center)
-    # where:
-    # offset_left = [-(depth_base+finger_width), -(width/2 + finger_width), -height/2]
-    # offset_bottom = [-(finger_width + depth_base), -width/2, -height/2]
-    
-    # Transform the relative vector from bottom to left finger to local coordinates
-    bottom_to_left = left_interior - bottom_center
-    local_bottom_to_left = R.T @ bottom_to_left
-    
-    # In local coordinates, this should be:
-    # [-(depth_base+finger_width), -(width/2 + finger_width), -height/2] + arm_bbox_center
-    # - ([-(finger_width + depth_base), -width/2, -height/2] + bottom_bbox_center)
-    
-    # Solve for width from the Y-component difference
-    # local_bottom_to_left[1] = (-(width/2 + finger_width) + finger_width/2) - (-width/2 + width/2)
-    # = -width/2 - finger_width + finger_width/2 - 0
-    # = -width/2 - finger_width/2
-    width = -2 * (local_bottom_to_left[1] + finger_width/2)
-    
-    # Solve for depth from the X-component difference  
-    # We need to account for bbox centers
-    # arm_bbox_center[0] = (depth + depth_base + finger_width) / 2
-    # bottom_bbox_center[0] = finger_width / 2
-    # local_bottom_to_left[0] = (-(depth_base+finger_width) + (depth+depth_base+finger_width)/2) - (-(finger_width+depth_base) + finger_width/2)
-    # = -(depth_base+finger_width) + (depth+depth_base+finger_width)/2 + finger_width + depth_base - finger_width/2
-    # = -(depth_base+finger_width) + (depth+depth_base+finger_width)/2 + finger_width + depth_base - finger_width/2
-    # = (depth+depth_base+finger_width)/2 - finger_width/2
-    # = (depth + depth_base)/2
-    depth = 2 * local_bottom_to_left[0] - depth_base
-    
-    # Calculate center using the fact that:
-    # left_interior = center + R @ (offset_left + arm_bbox_center)
-    arm_bbox_center = np.array([depth + depth_base + finger_width, finger_width, height]) / 2
-    offset_left = np.array([-(depth_base+finger_width), -(width/2 + finger_width), -height/2])
-    local_left = offset_left + arm_bbox_center
-    center = left_interior - R @ local_left
-    
-    return center, R, width, depth
+
+    points = [np.asarray(left_interior, dtype=np.float64),
+              np.asarray(right_interior, dtype=np.float64),
+              np.asarray(bottom_center, dtype=np.float64)]
+
+    def _solve_with_order(ordered_left, ordered_right, ordered_bottom):
+        """Recover gripper parameters assuming the order is correct."""
+        left_to_right = ordered_right - ordered_left
+        norm_lr = np.linalg.norm(left_to_right)
+        if norm_lr < 1e-9:
+            raise ValueError("Finger points overlap; cannot recover Y-axis.")
+        y_axis = left_to_right / norm_lr
+
+        fingers_center = (ordered_left + ordered_right) / 2
+
+        bottom_to_fingers = fingers_center - ordered_bottom
+        norm_bf = np.linalg.norm(bottom_to_fingers)
+        if norm_bf < 1e-9:
+            raise ValueError("Bottom point coincides with finger center; cannot recover X-axis.")
+        x_axis = bottom_to_fingers / norm_bf
+
+        z_axis = np.cross(x_axis, y_axis)
+        norm_z = np.linalg.norm(z_axis)
+        if norm_z < 1e-9:
+            raise ValueError("Provided points are collinear; cannot recover orthogonal basis.")
+        z_axis = z_axis / norm_z
+
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        R_local = np.column_stack([x_axis, y_axis, z_axis])
+
+        bottom_to_left = ordered_left - ordered_bottom
+        local_bottom_to_left = R_local.T @ bottom_to_left
+
+        width_local = -2 * (local_bottom_to_left[1] + finger_width / 2)
+        depth_local = 2 * local_bottom_to_left[0] - depth_base
+
+        arm_bbox_center = np.array([depth_local + depth_base + finger_width, finger_width, height]) / 2
+        offset_left = np.array([-(depth_base + finger_width), -(width_local / 2 + finger_width), -height / 2])
+        local_left = offset_left + arm_bbox_center
+        center_local = ordered_left - R_local @ local_left
+
+        return center_local, R_local, width_local, depth_local
+
+    best_result = None
+    best_error = None
+
+    for perm in itertools.permutations(range(3)):
+        ordered_left, ordered_right, ordered_bottom = [points[i] for i in perm]
+        try:
+            candidate = _solve_with_order(ordered_left, ordered_right, ordered_bottom)
+        except ValueError:
+            continue
+
+        center_candidate, R_candidate, width_candidate, depth_candidate = candidate
+
+        if not np.isfinite(width_candidate) or not np.isfinite(depth_candidate):
+            continue
+        if width_candidate <= 0 or depth_candidate <= 0:
+            continue
+
+        reconstructed = gripper_params_to_interior_points(
+            center_candidate, R_candidate, width_candidate, depth_candidate
+        )
+        ordered_points = (ordered_left, ordered_right, ordered_bottom)
+        error = sum(np.linalg.norm(reconstructed[i] - ordered_points[i]) for i in range(3))
+
+        if best_error is None or error < best_error:
+            best_error = error
+            best_result = candidate
+
+    if best_result is None:
+        raise ValueError("Could not infer gripper parameters from the provided points.")
+
+    center_res, R_res, width_res, depth_res = best_result
+    return center_res.astype(np.float32), R_res.astype(np.float32), float(width_res), float(depth_res)
 
 class Grasp():
     def __init__(self, *args):
@@ -439,6 +452,38 @@ class Grasp():
 
     def to_parampc(self):
         left_interior, right_interior, bottom_center = gripper_params_to_interior_points(self.translation, self.rotation_matrix, self.width, self.depth)
+        '''
+        recovered_center, recovered_rotation, recovered_width, recovered_depth = interior_points_to_gripper_params(left_interior, right_interior, bottom_center)
+
+        if not np.allclose(recovered_center, self.translation):
+            center_diff = np.abs(recovered_center - self.translation)
+            raise ValueError(
+                f'Recovered translation mismatch. max|diff|={center_diff.max():.6e}, '
+                f'original={self.translation}, recovered={recovered_center}'
+            )
+
+        if not np.allclose(recovered_rotation, self.rotation_matrix):
+            rotation_diff = np.abs(recovered_rotation - self.rotation_matrix)
+            raise ValueError(
+                f'Recovered rotation mismatch. max|diff|={rotation_diff.max():.6e}, '
+                f'original={self.rotation_matrix}, recovered={recovered_rotation}'
+            )
+
+        if not np.isclose(recovered_width, self.width):
+            width_diff = abs(recovered_width - self.width)
+            raise ValueError(
+                f'Recovered width mismatch. diff={width_diff:.6e}, '
+                f'original={self.width}, recovered={recovered_width}'
+            )
+
+        if not np.isclose(recovered_depth, self.depth):
+            depth_diff = abs(recovered_depth - self.depth)
+            raise ValueError(
+                f'Recovered depth mismatch. diff={depth_diff:.6e}, '
+                f'original={self.depth}, recovered={recovered_depth}'
+            )
+        '''
+
         return np.stack([left_interior, right_interior, bottom_center])
 
 
@@ -785,6 +830,25 @@ class GraspGroup():
             parampcs.append(g.to_parampc())
         
         return np.stack(parampcs)  # (N, 3, 3)
+        
+    def to_parampc_dict(self):
+
+        res={}
+
+
+        for i in range(len(self.grasp_group_array)):
+            g = Grasp(self.grasp_group_array[i])
+            id = g.object_id
+            if id not in res:
+                res[id] =[]
+            res[id].append(g.to_parampc())
+
+
+        for i in res.keys():
+            res[i] = np.stack(res[i])
+        
+        
+        return res # {obj_id: (obj_id, parampcs of shape (N, 3, 3))}
        
 
 def loadGraspLabels(objIds=None, root = '../data' ):
@@ -893,5 +957,3 @@ if __name__ == '__main__':
         print(f"[保存完成] 抓取几何体点云：{grasp_out_path}")
         
     import pdb; pdb.set_trace()
-
-

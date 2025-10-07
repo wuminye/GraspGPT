@@ -246,6 +246,7 @@ def reconstruct_grasp_from_points(points: np.ndarray) -> Optional[Grasp]:
     for order in permutations(range(3)):
         left, right, bottom = transformed[list(order)]
 
+        '''
         line_vec = right - left
         lr_dist = np.linalg.norm(line_vec)
         if lr_dist < 1e-6:
@@ -267,19 +268,25 @@ def reconstruct_grasp_from_points(points: np.ndarray) -> Optional[Grasp]:
         cost += abs(bottom_proj - mid_proj)
         if not (0.0 <= bottom_proj <= lr_dist):
             cost += 0.05
+        '''
 
         try:
             candidate = interior_points_to_gripper_params(left, right, bottom)
         except Exception:
             continue
+        best_candidate = candidate
 
         center, rotation, width, depth = candidate
+
+        break
+        '''
         if not np.isfinite(width) or not np.isfinite(depth) or width <= 0 or depth <= 0:
             continue
 
         if cost < best_cost:
             best_cost = cost
             best_candidate = candidate
+        '''
 
     if best_candidate is None:
         for order in permutations(range(3)):

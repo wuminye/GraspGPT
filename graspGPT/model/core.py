@@ -430,7 +430,7 @@ def generate_amodal_sequence(
                 _clamp(int(round(world_point[1])), max_indices[1]),
                 _clamp(int(round(world_point[2])), max_indices[2]),
             )
-            if discrete_coord[2] >=2:  # delete floor
+            if discrete_coord[2] >=3:  # delete floor
                 reconstructed_voxels.add(discrete_coord)
 
     reconstructed_voxels_list = sorted(reconstructed_voxels)

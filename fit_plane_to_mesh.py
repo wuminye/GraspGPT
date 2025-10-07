@@ -43,10 +43,10 @@ import open3d as o3d
 # Each inner list/tuple is a point [x, y, z] in meters.
 # Example below defines points roughly on the plane z = 0.1x + 0.05y + 0.2
 INLINE_POINTS = [
-    [-0.243588, 0.175468, 0.549568],
-    [-0.307070, -0.054061, 0.488427],
-    [0.12895,-0.024071, 0.497442],
-    [-0.050125,0.001224, 0.506726]
+    [1, 0, 0],
+    [0, 1, 0],
+    [-1,1, 0],
+    [-1,-1, 0]
 ]
 
 
