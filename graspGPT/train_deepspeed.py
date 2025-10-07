@@ -80,9 +80,10 @@ def get_default_config():
     # Dataset configuration
     C.dataset = CN()
     C.dataset.data_path = "../output/precomputed_data/"
-    C.dataset.max_sequence_length = 16384
+    C.dataset.max_sequence_length = 13000
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
+    C.dataset.real_filter_mode = 'amodal_only'
     
     # System configuration
     C.system = CN()
@@ -102,7 +103,7 @@ def get_default_config():
     C.wandb.project = 'graspgpt-deepspeed'
     C.wandb.entity = None  # Set to your wandb username/team
     C.wandb.name = None    # Run name, will be auto-generated if None
-    C.wandb.tags = ['amodal_useg', 'multi-gpu']      # List of tags for the run
+    C.wandb.tags = ['amodal_only', 'kv_head']      # List of tags for the run
     
     return C
 
@@ -290,7 +291,8 @@ def create_model_and_dataset(config):
     
     dataset = PrecomputedDataset(
         data_path=config.dataset.data_path,
-        max_sequence_length=config.dataset.max_sequence_length
+        max_sequence_length=config.dataset.max_sequence_length,
+        real_filter_mode=getattr(config.dataset, 'real_filter_mode', 'allow_all')
     )
     
     if rank == 0:
