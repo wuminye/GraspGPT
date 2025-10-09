@@ -217,11 +217,66 @@ class PrecomputedDataset(Dataset):
         """Return the number of samples in the dataset"""
         return len(self.data)
 
-    
+
+    def randomly_drop_scene_sb_coords(self, tokens: List, drop_ratio: float = 0.05) -> List:
+        """随机删除SCENE中SB的部分坐标以做数据增强。
+
+        Args:
+            tokens: 已解码的token序列，不包含EOS。
+            drop_ratio: 期望删除比例，默认5%。
+
+        Returns:
+            处理后的tokens。如果解析失败或无需修改则返回原tokens。
+        """
+        if not tokens:
+            return tokens
+
+        drop_ratio = max(0.0, min(drop_ratio, 1.0))
+        if drop_ratio == 0.0:
+            return tokens
+
+        try:
+            parser = Parser(tokens)
+            ast = parser.parse()
+        except Exception as exc:
+            print(f"Error in randomly_drop_scene_sb_coords: {exc}")
+            return tokens
+
+        modified = False
+
+        for item in getattr(ast, 'items', []):
+            if not isinstance(item, Scene):
+                continue
+
+            for sb in item.sbs:
+                original_cbs = sb.cbs
+                if len(original_cbs) <= 1:
+                    continue
+
+                kept_cbs = [cb for cb in original_cbs if random.random() >= drop_ratio]
+
+                if not kept_cbs:
+                    kept_cbs = [random.choice(original_cbs)]
+
+                ordered_cbs = sorted(
+                    kept_cbs,
+                    key=lambda cb: (cb.coord[0], cb.coord[1], cb.coord[2])
+                )
+
+                if len(ordered_cbs) != len(original_cbs) or ordered_cbs != original_cbs:
+                    sb.cbs = ordered_cbs
+                    modified = True
+
+        if not modified:
+            return tokens
+
+        return Serializer.serialize(ast)
+
+
     def filter_grasp_tokens(self, tokens: List) -> List:
         """
         将tokens转成语法AST，对GRASP部分中的GB进行筛选，然后序列化回tokens
-        
+
         筛选标准：对于当前tokens所表示的场景中多个SB，每个SB拥有至多5个与之相同TAG的GB
         
         Args:
@@ -320,6 +375,8 @@ class PrecomputedDataset(Dataset):
 
         tokens, num_others = self.filter_grasp_tokens(tokens)
 
+        
+
         '''
         rng = random.random()
         if rng < 0.35: # 数据增强
@@ -339,6 +396,8 @@ class PrecomputedDataset(Dataset):
                     tokens = generate_seg_sequence(tokens)
                 elif rng < 0.7:
                     tokens = generate_amodal_sequence(tokens,self.volume_dims)
+        else:
+            tokens = self.randomly_drop_scene_sb_coords(tokens)
 
         
 
