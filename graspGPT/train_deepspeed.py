@@ -71,6 +71,7 @@ def get_default_config():
     C.trainer.weight_decay = 0.01
     C.trainer.grad_norm_clip = 2.0
     C.trainer.betas = (0.9, 0.95)
+    C.trainer.use_loss_mask = False
     
     # Learning rate scheduler
     C.trainer.scheduler_type = 'cosine'
@@ -84,6 +85,7 @@ def get_default_config():
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
     C.dataset.real_filter_mode = 'amodal_only'
+    C.dataset.del_amodal_sequence = True
     
     # System configuration
     C.system = CN()
@@ -292,7 +294,8 @@ def create_model_and_dataset(config):
     dataset = PrecomputedDataset(
         data_path=config.dataset.data_path,
         max_sequence_length=config.dataset.max_sequence_length,
-        real_filter_mode=getattr(config.dataset, 'real_filter_mode', 'allow_all')
+        real_filter_mode=getattr(config.dataset, 'real_filter_mode', 'allow_all'),
+        apply_del_amodal_sequence=getattr(config.dataset, 'del_amodal_sequence', True)
     )
     
     if rank == 0:
@@ -393,7 +396,8 @@ def training_step(model_engine, batch, config):
     """Single training step"""
     x, y, loss_mask = batch
 
-    #loss_mask = None # Not used currently !!!!!!!!!!!!!!!!!!!
+    if not getattr(config.trainer, 'use_loss_mask', False):
+        loss_mask = None
 
     # Move to device (DeepSpeed handles this automatically)
     x = x.to(model_engine.local_rank, non_blocking=True)
@@ -442,6 +446,11 @@ def main():
                        help='Local rank for distributed training')
     parser.add_argument('--deepspeed_config', type=str, default=None,
                        help='Path to DeepSpeed config file (overrides config)')
+    parser.add_argument('--del_amodal_sequence', dest='del_amodal_sequence', action='store_true',
+                       help='Apply del_amodal_sequence during dataset preprocessing (overrides config)')
+    parser.add_argument('--no_del_amodal_sequence', dest='del_amodal_sequence', action='store_false',
+                       help='Skip del_amodal_sequence during dataset preprocessing (overrides config)')
+    parser.set_defaults(del_amodal_sequence=None)
     
     # Parse known args to handle DeepSpeed arguments
     args, unknown_args = parser.parse_known_args()
@@ -481,6 +490,8 @@ def main():
         config.wandb.name = args.wandb_name
     if args.deepspeed_config:
         config.deepspeed.config_path = args.deepspeed_config
+    if args.del_amodal_sequence is not None:
+        config.dataset.del_amodal_sequence = args.del_amodal_sequence
     
     config.deepspeed.local_rank = args.local_rank
     

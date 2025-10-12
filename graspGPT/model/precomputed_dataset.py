@@ -13,11 +13,11 @@ import random
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
     from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
-    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
+    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, del_amodal_sequence
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
     from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
-    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
+    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, del_amodal_sequence
 
 
 
@@ -45,19 +45,22 @@ class PrecomputedDataset(Dataset):
     def __init__(self, 
                  data_path: str,
                  max_sequence_length: int = 1024,
-                 real_filter_mode: str = 'allow_all'):
+                 real_filter_mode: str = 'allow_all',
+                 apply_del_amodal_sequence: bool = True):
         """
         Initialize the PrecomputedDataset
-        
+
         Args:
             data_path (str): Path to directory containing precomputed .pth files
             max_sequence_length (int): Maximum sequence length for padding/truncation
             real_filter_mode (str): Filter rule for files whose name contains 'real'.
                 Options: 'no_amodal_unseg', 'amodal_only', 'unseg_only', 'allow_all', 'skip'.
+            apply_del_amodal_sequence (bool): Whether to strip AMODAL sequences via del_amodal_sequence.
         """
         self.data_path = Path(data_path)
         self.max_sequence_length = max_sequence_length
         self.real_filter_mode = self._validate_filter_mode(real_filter_mode)
+        self.apply_del_amodal_sequence = bool(apply_del_amodal_sequence)
 
         # Internal cache for token mapping and real-data filter ids
         self._token_mapping_cache: Optional[Dict] = None
@@ -415,7 +418,8 @@ class PrecomputedDataset(Dataset):
         else:
             tokens = self.randomly_drop_scene_sb_coords(tokens)
 
-        
+        if self.apply_del_amodal_sequence:
+            tokens = del_amodal_sequence(tokens)
 
         tokens = encode_sequence(tokens, self.token_mapping)
 

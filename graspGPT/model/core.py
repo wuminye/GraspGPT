@@ -733,3 +733,22 @@ def maybe_drop_amodal_or_unseg(
         tokens, details = seg_output
         return _apply(tokens), details
     return _apply(seg_output)
+
+
+def del_amodal_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]]):
+    """将 SCENE 聚合为单个 'unlabel' 点云，并把原始数据迁移到 UNSEG。"""
+
+    parser = Parser(token_sequence)
+    original_seq = parser.parse()
+
+
+
+    new_items = []
+
+    for item in original_seq.items:
+        if isinstance(item, Scene):
+            new_items.append(item)
+        elif isinstance(item, GRASP):
+           new_items.append(item)
+
+    return Serializer.serialize(Seq(items=new_items))
