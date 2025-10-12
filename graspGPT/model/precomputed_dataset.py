@@ -20,36 +20,9 @@ except ImportError:
     from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 
 
-_TOKEN_MANAGER = get_token_manager()
-_TOKEN_TO_ID = {token: idx for idx, token in enumerate(_TOKEN_MANAGER.all_tokens)}
-_COORDINATE_START_ID = len(_TOKEN_MANAGER.all_tokens)
-_SCENE_TOKEN_ID = _TOKEN_TO_ID.get('scene')
-_SCENE_TERMINATOR_IDS = {
-    _TOKEN_TO_ID.get(token)
-    for token in ('segment', 'amodal', 'detectgrasp', 'end')
-    if token in _TOKEN_TO_ID
-}
-_SHAPE_TAG_ID_TO_NAME = {
-    _TOKEN_TO_ID[tag]: tag
-    for tag in _TOKEN_MANAGER.shape_tags
-    if tag in _TOKEN_TO_ID
-}
-_SERIAL_TOKEN_IDS = {
-    _TOKEN_TO_ID[token]
-    for token in _TOKEN_MANAGER.serial_tokens
-    if token in _TOKEN_TO_ID
-}
-_INCOMPLETE_TOKEN_ID = _TOKEN_TO_ID.get('incomplete')
 
 
-def _build_incomplete_loss_mask(token_tensor: torch.Tensor) -> torch.Tensor:
-    """Build a loss mask that keeps SCENE/SB tokens tagged as 'incomplete'."""
-    flat_tokens = token_tensor.view(-1).tolist()
-    mask = torch.ones(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
 
-    mask[:flat_tokens.index("amodal")] = 0.0
-
-    return mask
 
 
 
@@ -110,6 +83,15 @@ class PrecomputedDataset(Dataset):
             valid = ', '.join(sorted(self._REAL_FILTER_MODES))
             raise ValueError(f"Unsupported real_filter_mode '{mode}'. Supported options: {valid}")
         return normalized
+
+    def _build_incomplete_loss_mask(self, token_tensor: torch.Tensor) -> torch.Tensor:
+        """Build a loss mask that keeps SCENE/SB tokens tagged as 'incomplete'."""
+        flat_tokens = token_tensor.view(-1).tolist()
+        mask = torch.ones(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
+
+        mask[:flat_tokens.index(self.token_mapping['amodal'])] = 0.0
+
+        return mask
 
     def _load_precomputed_data(self) -> List[Dict]:
         """Load all precomputed data files from directory"""
@@ -450,7 +432,7 @@ class PrecomputedDataset(Dataset):
 
         tokens = tokens.unsqueeze(-1)
 
-        loss_mask = _build_incomplete_loss_mask(tokens)
+        loss_mask = self._build_incomplete_loss_mask(tokens)
 
         return tokens, seq_len, loss_mask
 
