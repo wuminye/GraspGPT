@@ -11,7 +11,7 @@ from torch.utils.data.dataloader import DataLoader
 from .utils import CfgNode as CN
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ExponentialLR
-from .precomputed_dataset import _build_incomplete_loss_mask
+
 
 
 
@@ -33,10 +33,9 @@ def pad_collate(batch):
         chunk = tokens[i]
         provided_mask = metadata[i]
 
-        if isinstance(provided_mask, torch.Tensor):
-            mask = provided_mask.to(device=chunk.device, dtype=torch.float32)
-        else:
-            mask = _build_incomplete_loss_mask(chunk)
+
+        mask = provided_mask.to(device=chunk.device, dtype=torch.float32)
+
         
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
         if chunk.shape[0] < max_length:
