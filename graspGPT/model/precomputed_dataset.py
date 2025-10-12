@@ -322,7 +322,6 @@ class PrecomputedDataset(Dataset):
                     filtered_gbs = []
                     if len(sb_tags)>1:
                         for gb in item.gbs:
-                            # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                             if gb.tag in sb_tags:
                                 current_count = tag_count.get(gb.tag, 0)
                                 if current_count < 100:
@@ -335,6 +334,9 @@ class PrecomputedDataset(Dataset):
                     random.shuffle(filtered_gbs)
                     if len(filtered_gbs)>700:
                         filtered_gbs = filtered_gbs[:700]
+                    filtered_gbs.sort(
+                        key=lambda gb: gb.cbs[0].coord if gb.cbs else (1 << 30, 1 << 30, 1 << 30)
+                    )
                     # 更新GRASP的GB列表
                     item.gbs = filtered_gbs
                     grasp_block = item
