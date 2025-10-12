@@ -11,72 +11,7 @@ from torch.utils.data.dataloader import DataLoader
 from .utils import CfgNode as CN
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, ExponentialLR
-from .token_manager import get_token_manager
-
-
-_TOKEN_MANAGER = get_token_manager()
-_TOKEN_TO_ID = {token: idx for idx, token in enumerate(_TOKEN_MANAGER.all_tokens)}
-_COORDINATE_START_ID = len(_TOKEN_MANAGER.all_tokens)
-_SCENE_TOKEN_ID = _TOKEN_TO_ID.get('scene')
-_SCENE_TERMINATOR_IDS = {
-    _TOKEN_TO_ID.get(token)
-    for token in ('segment', 'amodal', 'detectgrasp', 'end')
-    if token in _TOKEN_TO_ID
-}
-_SHAPE_TAG_ID_TO_NAME = {
-    _TOKEN_TO_ID[tag]: tag
-    for tag in _TOKEN_MANAGER.shape_tags
-    if tag in _TOKEN_TO_ID
-}
-_SERIAL_TOKEN_IDS = {
-    _TOKEN_TO_ID[token]
-    for token in _TOKEN_MANAGER.serial_tokens
-    if token in _TOKEN_TO_ID
-}
-_INCOMPLETE_TOKEN_ID = _TOKEN_TO_ID.get('incomplete')
-
-
-def _build_incomplete_loss_mask(token_tensor: torch.Tensor) -> torch.Tensor:
-    """Build a loss mask that keeps SCENE/SB tokens tagged as 'incomplete'."""
-    flat_tokens = token_tensor.view(-1).tolist()
-    mask = torch.zeros(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
-
-    if _SCENE_TOKEN_ID is None or _INCOMPLETE_TOKEN_ID is None:
-        return mask
-
-    in_scene = False
-    current_sb_tag = None
-
-    for idx, token_id in enumerate(flat_tokens):
-        if token_id == _SCENE_TOKEN_ID:
-            in_scene = True
-            current_sb_tag = None
-            continue
-
-        if not in_scene:
-            continue
-
-        if token_id in _SCENE_TERMINATOR_IDS:
-            in_scene = False
-            current_sb_tag = None
-            continue
-
-        if token_id in _SHAPE_TAG_ID_TO_NAME:
-            current_sb_tag = _SHAPE_TAG_ID_TO_NAME[token_id]
-            if current_sb_tag == 'incomplete':
-                mask[idx] = 1.0
-            continue
-
-        if token_id in _SERIAL_TOKEN_IDS or token_id >= _COORDINATE_START_ID:
-            if current_sb_tag == 'incomplete':
-                mask[idx] = 1.0
-            continue
-
-        # Other tokens within SCENE (unlikely) are ignored unless we're inside an incomplete SB
-        if current_sb_tag == 'incomplete':
-            mask[idx] = 1.0
-
-    return mask
+from .precomputed_dataset import _build_incomplete_loss_mask
 
 
 
@@ -89,14 +24,19 @@ def pad_collate(batch):
         x: (b x t x g)
         y: (b x t x g)
     """
-    tokens, sequence_length, _ = zip(*batch)
+    tokens, sequence_length, metadata = zip(*batch)
     max_length = max(sequence_length)
 
     chunks = []
     loss_masks = []
     for i in range(len(tokens)):
         chunk = tokens[i]
-        mask = _build_incomplete_loss_mask(chunk)
+        provided_mask = metadata[i]
+
+        if isinstance(provided_mask, torch.Tensor):
+            mask = provided_mask.to(device=chunk.device, dtype=torch.float32)
+        else:
+            mask = _build_incomplete_loss_mask(chunk)
         
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
         if chunk.shape[0] < max_length:
@@ -133,22 +73,24 @@ def pad_collate(batch):
 def pad_collate_packed(batch):
     """
     Splits tokens by max_sequence_length into chunks and pads the last chunk if needed.
-    
+
     Args:
         batch: List of tuples (tokens, max_sequence_length)
             - tokens: tensor of shape [seq_len, ...]
             - max_sequence_length: int, maximum sequence length for chunking
-    
+
     Returns:
         List of tensors, where each tensor has shape [max_sequence_length, ...] except
         possibly the last one which is padded with -1 if it's shorter than max_sequence_length
     """
-    tokens, max_sequence_length = zip(*batch)
-    max_sequence_length = max_sequence_length[0]
-    
+    tokens = [item[0] for item in batch]
+    max_sequence_length = batch[0][1]
+    if isinstance(max_sequence_length, torch.Tensor):
+        max_sequence_length = int(max_sequence_length.item())
+
     # Concatenate all tokens along the first dimension
     tokens = torch.cat(tokens, dim=0)
-    
+
     # Split tokens into chunks of max_sequence_length
     seq_len = tokens.shape[0]
     chunks = []
