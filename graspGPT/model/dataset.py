@@ -916,8 +916,7 @@ class VoxelDataset(Dataset):
                 
                 # Create GB for this individual grasp if we have at least one coordinate
                 if cbs:
-                    # Sort CBs by coordinates for consistent ordering
-                    cbs.sort(key=lambda cb: cb.coord)
+                    #cbs.sort(key=lambda cb: cb.coord)
                     gb = GB(tag=shape_tag, cbs=cbs)
                     local_gbs.append(gb)
 

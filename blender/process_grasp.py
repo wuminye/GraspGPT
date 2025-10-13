@@ -254,8 +254,13 @@ def interior_points_to_gripper_params(left_interior, right_interior, bottom_cent
 
         return center_local, R_local, width_local, depth_local
 
+
+    candidate = _solve_with_order(left_interior, right_interior, bottom_center)
+
+    '''
     best_result = None
     best_error = None
+    
 
     for perm in itertools.permutations(range(3)):
         ordered_left, ordered_right, ordered_bottom = [points[i] for i in perm]
@@ -283,8 +288,9 @@ def interior_points_to_gripper_params(left_interior, right_interior, bottom_cent
 
     if best_result is None:
         raise ValueError("Could not infer gripper parameters from the provided points.")
+    '''
 
-    center_res, R_res, width_res, depth_res = best_result
+    center_res, R_res, width_res, depth_res = candidate
     return center_res.astype(np.float32), R_res.astype(np.float32), float(width_res), float(depth_res)
 
 class Grasp():
@@ -452,6 +458,7 @@ class Grasp():
 
     def to_parampc(self):
         left_interior, right_interior, bottom_center = gripper_params_to_interior_points(self.translation, self.rotation_matrix, self.width, self.depth)
+        
         '''
         recovered_center, recovered_rotation, recovered_width, recovered_depth = interior_points_to_gripper_params(left_interior, right_interior, bottom_center)
 

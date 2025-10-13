@@ -46,7 +46,7 @@ class PrecomputedDataset(Dataset):
                  data_path: str,
                  max_sequence_length: int = 1024,
                  real_filter_mode: str = 'allow_all',
-                 apply_del_amodal_sequence: bool = True):
+                 apply_del_amodal_sequence: bool = False):
         """
         Initialize the PrecomputedDataset
 
@@ -92,7 +92,7 @@ class PrecomputedDataset(Dataset):
         flat_tokens = token_tensor.view(-1).tolist()
         mask = torch.ones(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
 
-        mask[:flat_tokens.index(self.token_mapping['amodal'])] = 0.0
+        #mask[:flat_tokens.index(self.token_mapping['amodal'])] = 0.0
 
         return mask
 
