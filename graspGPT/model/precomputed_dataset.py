@@ -423,7 +423,7 @@ class PrecomputedDataset(Dataset):
 
         tokens = encode_sequence(tokens, self.token_mapping)
 
-        #tokens = tokens[:-1]  # Remove the final EOS token for training
+        tokens = tokens[:-1]  # Remove the final EOS token for training
 
         seq_len = len(tokens)
 
