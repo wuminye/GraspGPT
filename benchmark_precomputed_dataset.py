@@ -48,10 +48,10 @@ def benchmark_dataset(data_path: str,
             
             # Custom collate function to handle None values
             def custom_collate(batch):
-                tokens, seq_lengths, scene_grasps = zip(*batch)
-                # Stack tokens and seq_lengths, ignore scene_grasps (which are None)
+                tokens, seq_lengths, loss_masks = zip(*batch)
+                # Stack tokens and seq_lengths, keep loss_masks for completeness
 
-                return tokens, seq_lengths, None
+                return tokens, seq_lengths, loss_masks
             
             # Create DataLoader
             dataloader = DataLoader(
@@ -78,7 +78,7 @@ def benchmark_dataset(data_path: str,
                      total=actual_samples, 
                      unit="samples") as pbar:
                 
-                for batch_idx, (tokens, seq_lengths, scene_grasps) in enumerate(dataloader):
+                for batch_idx, (tokens, seq_lengths, loss_masks) in enumerate(dataloader):
                     batch_samples = len(tokens)
                     processed_samples += batch_samples
                     pbar.update(batch_samples)
@@ -141,7 +141,7 @@ def test_single_sample_speed(data_path: str, num_tests: int = 100):
     
     start_time = time.time()
     for idx in tqdm(indices, desc="Single samples"):
-        tokens, seq_len, scene_grasps = dataset[idx]
+        tokens, seq_len, _ = dataset[idx]
     end_time = time.time()
     
     elapsed_time = end_time - start_time

@@ -1,0 +1,602 @@
+#!/usr/bin/env python3
+"""Merge multiple .pth batches produced by generate_and_align_scene_pointcloud.py.
+
+The script concatenates the sample dictionaries emitted by the alignment
+pipeline into a single file that PrecomputedDataset can consume directly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import os
+import random
+import re
+import sys
+from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, Future, wait
+from contextlib import suppress
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+
+from graspGPT.model.token_manager import get_token_manager, encode_sequence, decode_sequence
+from graspGPT.model.parser_and_serializer import Serializer, Seq, Scene, SB, CB, GB, GRASP, AMODAL, Parser
+
+try:
+    from tqdm.auto import tqdm  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    tqdm = None
+
+import torch
+
+
+CHUNK_SIZE = 3000
+
+
+META_KEYS: Sequence[str] = ("volume_dims", "bbox_min", "bbox_max", "voxel_size")
+SCENE_FILENAME_PATTERN = re.compile(r"scene_(\d{4})_ann_(\d{3})\.pth$")
+
+
+_SAMPLE_WORKER_STATE: Dict[str, Any] | None = None
+
+
+def _init_sample_worker(state: Dict[str, Any]) -> None:
+    """Store shared state in each worker process and seed RNG."""
+
+    global _SAMPLE_WORKER_STATE  # noqa: PLW0603
+    _SAMPLE_WORKER_STATE = state
+    seed = state.get("seed", 0)
+    random.seed(seed + os.getpid())
+
+
+_MERGE_WORKER_STATE: Dict[str, Any] | None = None
+
+
+def _init_merge_worker(reference_meta: Dict[str, Any], volume_dims: Tuple[int, int, int]) -> None:
+    """Prepare shared state for merge workers."""
+
+    global _MERGE_WORKER_STATE  # noqa: PLW0603
+    token_manager = get_token_manager()
+    token_mapping = token_manager.generate_mapping(
+        volume_dims[0], volume_dims[1], volume_dims[2]
+    )
+    _MERGE_WORKER_STATE = {
+        "reference_meta": reference_meta,
+        "token_mapping": token_mapping,
+    }
+
+
+def _process_path_for_merge(path: Path) -> List[Tuple[Seq, Dict[str, Any]]]:
+    """Load and filter a single batch inside a worker process."""
+
+    if _MERGE_WORKER_STATE is None:
+        raise RuntimeError("Merge worker state not initialized")
+
+    reference_meta: Dict[str, Any] = _MERGE_WORKER_STATE["reference_meta"]
+    token_mapping = _MERGE_WORKER_STATE["token_mapping"]
+
+    batch = load_batch(path)
+    results: List[Tuple[Seq, Dict[str, Any]]] = []
+
+    for sample in batch:
+        ensure_metadata_consistency(reference_meta, sample, path)
+        tokens = decode_sequence(sample["raw_tokens"], token_mapping)
+        parser = Parser(tokens)
+        original_seq = parser.parse()
+
+        if any(isinstance(item, AMODAL) for item in original_seq.items):
+            results.append((original_seq, sample))
+
+    return results
+
+
+def _generate_sample_once() -> Optional[Dict[str, Any]]:
+    """Attempt to synthesize a single sample.
+
+    Returns None when the attempt fails to produce a valid sample so the caller
+    can try again until the desired count is reached or attempts are exhausted.
+    """
+
+    if _SAMPLE_WORKER_STATE is None:
+        raise RuntimeError("Worker state not initialized")
+
+    merged: List[Tuple[Seq, Dict[str, Any]]] = _SAMPLE_WORKER_STATE["merged"]
+    fallback_tag: str = _SAMPLE_WORKER_STATE["fallback_tag"]
+    token_mapping = _SAMPLE_WORKER_STATE["token_mapping"]
+    sample_group_size: int = _SAMPLE_WORKER_STATE["sample_group_size"]
+
+    if not merged:
+        return None
+
+    sample_pool_size = len(merged)
+    if sample_pool_size >= sample_group_size:
+        selected = random.sample(merged, sample_group_size)
+    else:
+        selected = random.choices(merged, k=sample_group_size)
+
+    coord_to_serial: Dict[Tuple[int, int, int], Optional[str]] = {}
+    coord_counts: Dict[Tuple[int, int, int], int] = {}
+    for seq_obj, _ in selected:
+        scene = next((item for item in seq_obj.items if isinstance(item, Scene)), None)
+        if scene is None:
+            continue
+        seen_in_seq: Set[Tuple[int, int, int]] = set()
+        for sb in scene.sbs:
+            for cb in sb.cbs:
+                if cb.coord not in coord_to_serial:
+                    coord_to_serial[cb.coord] = cb.serial
+                if cb.coord in seen_in_seq:
+                    continue
+                coord_counts[cb.coord] = coord_counts.get(cb.coord, 0) + 1
+                seen_in_seq.add(cb.coord)
+
+    filtered_coords = [coord for coord, count in coord_counts.items() if count >= 3]
+    sorted_coords = sorted(filtered_coords)
+    new_cbs = [CB(coord=coord, serial=coord_to_serial[coord]) for coord in sorted_coords]
+    if not new_cbs:
+        return None
+
+    base_scene = next((item for item in selected[0][0].items if isinstance(item, Scene)), None)
+    base_tag = fallback_tag
+    if base_scene and base_scene.sbs:
+        base_tag = base_scene.sbs[0].tag
+
+    new_scene = Scene(sbs=[SB(tag=base_tag, cbs=new_cbs)])
+
+    all_gbs: List[GB] = []
+    for seq_obj, _ in selected:
+        grasp = next((item for item in seq_obj.items if isinstance(item, GRASP)), None)
+        if not grasp:
+            continue
+        all_gbs.extend(deepcopy(grasp.gbs))
+
+    if all_gbs:
+        target_gb_count = max(1, math.ceil(len(all_gbs) * 0.3))
+        target_gb_count = max(target_gb_count,700)
+        target_gb_count = min(target_gb_count, len(all_gbs))
+        chosen_gbs = [deepcopy(gb) for gb in random.sample(all_gbs, target_gb_count)]
+    else:
+        chosen_gbs = []
+
+    new_grasp = GRASP(gbs=chosen_gbs)
+
+    amodal = next((item for item in selected[0][0].items if isinstance(item, AMODAL)), None)
+    if amodal is None:
+        return None
+
+    new_seq = Seq(items=[new_scene, deepcopy(amodal), new_grasp])
+
+    serialized_tokens = Serializer.serialize(new_seq)
+    encoded_tokens = encode_sequence(serialized_tokens, token_mapping)
+
+    template_sample = selected[0][1]
+    new_sample = dict(template_sample)
+    new_sample["raw_tokens"] = encoded_tokens
+    return new_sample
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Merge multiple .pth files generated by generate_and_align_scene_pointcloud.py "
+            "into a single batch compatible with graspGPT.model.precomputed_dataset.PrecomputedDataset."
+        )
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default="output/real_data/test_new",
+        help="Directory containing .pth files to merge (non-recursive).",
+    )
+    parser.add_argument(
+        "--inputs",
+        type=Path,
+        nargs="*",
+        default=(),
+        help="Explicit list of .pth files to merge (in addition to --input-dir).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default="output/real_data/test_new_real_pths.pth",
+        help="Destination .pth file for the merged data.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite the output file if it already exists.",
+    )
+    parser.add_argument(
+        "--sort-by-length",
+        action="store_true",
+        help="Sort merged samples by raw token length to match PrecomputedDataset expectations.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.input_dir is None and not args.inputs:
+        parser.error("Provide at least one input source via --input-dir or --inputs.")
+
+    return args
+
+
+def collect_input_paths(input_dir: Path | None, explicit: Iterable[Path]) -> List[Path]:
+    paths: List[Path] = []
+    if input_dir is not None:
+        if not input_dir.exists():
+            raise FileNotFoundError(f"Input directory not found: {input_dir}")
+        if not input_dir.is_dir():
+            raise NotADirectoryError(f"--input-dir must be a directory: {input_dir}")
+        paths.extend(sorted(input_dir.glob("*.pth")))
+
+    for path in explicit:
+        if not path.exists():
+            raise FileNotFoundError(f"Explicit input file not found: {path}")
+        if path.is_dir():
+            raise IsADirectoryError(f"Explicit input path is a directory: {path}")
+        if path.suffix != ".pth":
+            raise ValueError(f"Explicit input must be a .pth file: {path}")
+        paths.append(path)
+
+    if not paths:
+        raise FileNotFoundError("No .pth files found to merge.")
+
+    # Deduplicate while preserving order from the combined list.
+    seen = set()
+    ordered_paths: List[Path] = []
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        ordered_paths.append(path)
+
+    return ordered_paths
+
+
+def load_batch(path: Path) -> List[Dict[str, Any]]:
+    batch = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(batch, (list, tuple)):
+        raise TypeError(f"File {path} does not contain a list/tuple of samples.")
+
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(batch):
+        if not isinstance(item, dict):
+            raise TypeError(f"Sample {index} in {path} is not a dictionary.")
+        if "raw_tokens" not in item:
+            raise KeyError(f"Sample {index} in {path} lacks 'raw_tokens'.")
+        normalized.append(item)
+
+    return normalized
+
+
+def ensure_metadata_consistency(ref_meta: Dict[str, Any] | None, sample: Dict[str, Any], source: Path) -> Dict[str, Any]:
+    current_meta = {key: sample.get(key) for key in META_KEYS}
+    if ref_meta is None:
+        return current_meta
+
+    for key in META_KEYS:
+        if key not in ref_meta:
+            continue
+        reference_value = ref_meta[key]
+        current_value = current_meta.get(key)
+
+        if key == "volume_dims":
+            if tuple(current_value) != tuple(reference_value):
+                raise ValueError(
+                    f"Mismatch in '{key}' between files. Reference: {reference_value}, current ({source}): {current_value}"
+                )
+        else:
+            ref_tensor = torch.as_tensor(reference_value, dtype=torch.float64)
+            cur_tensor = torch.as_tensor(current_value, dtype=torch.float64)
+            if not torch.allclose(cur_tensor, ref_tensor):
+                raise ValueError(
+                    f"Mismatch in '{key}' between files. Reference: {reference_value}, current ({source}): {current_value}"
+                )
+
+    return ref_meta
+
+
+def merge_batches(paths: Sequence[Path], num_target_samples: int = 50) -> List[Dict[str, Any]]:
+    merged: List[Tuple[Seq, Dict[str, Any]]] = []
+    reference_meta: Dict[str, Any] | None = None
+
+    token_manager = get_token_manager()
+    path_list = list(paths)
+    total_paths = len(path_list)
+    path_progress = (
+        tqdm(total=total_paths, desc="Loading batches", leave=False)
+        if tqdm is not None
+        else None
+    )
+
+    token_mapping: Dict[Any, int] | None = None
+    volume_dims: Tuple[int, int, int] | None = None
+    remaining_paths: List[Path] = []
+    sample_progress = None
+
+    try:
+        for index, path in enumerate(path_list):
+            batch = load_batch(path)
+            if path_progress is not None:
+                path_progress.update(1)
+            if not batch:
+                continue
+
+            for sample in batch:
+                reference_meta = ensure_metadata_consistency(reference_meta, sample, path)
+                if reference_meta is None:
+                    continue
+
+                if volume_dims is None:
+                    dims = reference_meta.get("volume_dims")
+                    if dims is None:
+                        raise ValueError("Missing 'volume_dims' in sample metadata.")
+                    if hasattr(dims, "tolist"):
+                        dims = dims.tolist()
+                    volume_dims = tuple(int(dim) for dim in dims)
+                    if len(volume_dims) != 3:
+                        raise ValueError(
+                            f"Expected 3 volume dimensions, received {volume_dims} from {path}"
+                        )
+                    token_mapping = token_manager.generate_mapping(
+                        volume_dims[0], volume_dims[1], volume_dims[2]
+                    )
+
+                if token_mapping is None:
+                    continue
+
+                tokens = decode_sequence(sample["raw_tokens"], token_mapping)
+                parser = Parser(tokens)
+                original_seq = parser.parse()
+
+                if any(isinstance(item, AMODAL) for item in original_seq.items):
+                    merged.append((original_seq, sample))
+
+            if reference_meta is not None:
+                remaining_paths = path_list[index + 1 :]
+                break
+        else:
+            if path_progress is not None:
+                remaining = total_paths - (path_progress.n if hasattr(path_progress, "n") else 0)
+                if remaining > 0:
+                    path_progress.update(remaining)
+            remaining_paths = []
+
+        if remaining_paths:
+            if reference_meta is None or volume_dims is None:
+                raise ValueError("Metadata reference unavailable for parallel merge.")
+
+            max_workers = os.cpu_count() or 1
+            max_workers = max(1, min(max_workers, len(remaining_paths)))
+
+            with ProcessPoolExecutor(
+                max_workers=max_workers,
+                initializer=_init_merge_worker,
+                initargs=(reference_meta, volume_dims),
+            ) as executor:
+                for results in executor.map(_process_path_for_merge, remaining_paths):
+                    merged.extend(results)
+                    if path_progress is not None:
+                        path_progress.update(1)
+
+        if not merged:
+            raise ValueError("All input files were empty.")
+
+        #对merged列表中的结果进行合并
+
+        res = []
+
+        if reference_meta is None:
+            raise ValueError("Metadata reference unavailable for merging.")
+
+        volume_dims = reference_meta["volume_dims"]
+        token_mapping = token_manager.generate_mapping(volume_dims[0], volume_dims[1], volume_dims[2])
+
+        shape_tags = token_manager.shape_tags
+        fallback_tag = shape_tags[0] if shape_tags else "object00"
+
+        sample_group_size = 10
+        max_attempts = num_target_samples * 10 if num_target_samples > 0 else 0
+        attempts = 0
+
+        if num_target_samples <= 0:
+            return res
+
+        sample_progress = (
+            tqdm(total=num_target_samples, desc="Synthesizing samples", leave=False)
+            if tqdm is not None
+            else None
+        )
+
+        worker_state = {
+            "merged": merged,
+            "fallback_tag": fallback_tag,
+            "token_mapping": token_mapping,
+            "sample_group_size": sample_group_size,
+            "seed": random.randrange(1 << 30),
+        }
+
+        max_workers = os.cpu_count() or 1
+        max_workers = min(max_workers, max(1, num_target_samples))
+
+        pending: Set[Future[Optional[Dict[str, Any]]]] = set()
+
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_init_sample_worker,
+            initargs=(worker_state,),
+        ) as executor:
+            while (
+                len(res) < num_target_samples
+                and (max_attempts == 0 or attempts < max_attempts or pending)
+            ):
+                while (
+                    len(pending) < max_workers
+                    and len(res) + len(pending) < num_target_samples
+                    and (max_attempts == 0 or attempts < max_attempts)
+                ):
+                    attempts += 1
+                    pending.add(executor.submit(_generate_sample_once))
+
+                if not pending:
+                    break
+
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    sample = future.result()
+                    if sample is None:
+                        continue
+                    res.append(sample)
+                    if sample_progress is not None:
+                        sample_progress.update(1)
+                    if len(res) >= num_target_samples:
+                        for remaining in pending:
+                            remaining.cancel()
+                        wait(pending, timeout=None)
+                        pending.clear()
+                        break
+
+        if len(res) < num_target_samples:
+            raise ValueError(
+                f"Unable to synthesize the requested number of samples: requested {num_target_samples}, produced {len(res)}."
+            )
+
+        return res
+    finally:
+        if sample_progress is not None:
+            sample_progress.close()
+        if path_progress is not None:
+            path_progress.close()
+
+
+def main(argv: Sequence[str]) -> int:
+    args = parse_args(argv)
+
+    try:
+        input_paths = collect_input_paths(args.input_dir, args.inputs)
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"Error while collecting inputs: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        # Sort and group input files by scene id before merging so each scene is processed together.
+        sorted_inputs = sorted(input_paths, key=lambda path: path.name)
+        grouped_paths: Dict[str, List[Path]] = defaultdict(list)
+        
+        for path in sorted_inputs:
+            match = SCENE_FILENAME_PATTERN.fullmatch(path.name)
+            if not match:
+                raise ValueError(
+                    "Input file does not match expected pattern 'scene_####_ann_###.pth': "
+                    f"{path.name}"
+                )
+            scene_id = match.group(1)
+            grouped_paths[scene_id].append(path)
+
+        suffix = "".join(args.output.suffixes)
+        base_name = args.output.name
+        if suffix:
+            base_name = base_name[: -len(suffix)]
+        base_name = base_name.rstrip("_") or args.output.stem or "output"
+        chunk_prefix = f"{base_name}_"
+
+        def chunk_path(index: int) -> Path:
+            name = f"{chunk_prefix}{index:04d}{suffix}"
+            return args.output.with_name(name) if name else args.output
+
+        written_paths: List[Path] = []
+        total_samples_written = 0
+        chunk_size = CHUNK_SIZE
+        chunk_index = 0
+        multi_chunk = False
+        buffer: List[Dict[str, Any]] = []
+        all_samples: Optional[List[Dict[str, Any]]] = [] if args.sort_by_length else None
+
+        try:
+            scene_ids = sorted(grouped_paths)
+            total_scenes = len(scene_ids)
+
+            def write_chunk(chunk_data: List[Dict[str, Any]], final_chunk: bool) -> None:
+                nonlocal chunk_index, multi_chunk, total_samples_written
+                if not chunk_data:
+                    return
+
+                if final_chunk and not multi_chunk and chunk_index == 0:
+                    target_path = args.output
+                else:
+                    if not multi_chunk:
+                        multi_chunk = True
+                    target_path = chunk_path(chunk_index)
+
+                if not args.force and target_path.exists():
+                    raise FileExistsError(f"Output file already exists: {target_path}")
+
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(chunk_data, target_path)
+                written_paths.append(target_path)
+                chunk_index += 1
+                total_samples_written += len(chunk_data)
+
+            for scene_idx, scene_id in enumerate(scene_ids, start=1):
+                print('======= Scene ',scene_id,'================')
+                scene_paths = grouped_paths[scene_id]
+                scene_samples = merge_batches(scene_paths)
+
+                if all_samples is not None:
+                    all_samples.extend(scene_samples)
+                else:
+                    buffer.extend(scene_samples)
+                    is_last_scene = scene_idx == total_scenes
+                    threshold = chunk_size if not is_last_scene else chunk_size + 1
+                    while len(buffer) >= threshold:
+                        chunk = buffer[:chunk_size]
+                        write_chunk(chunk, final_chunk=False)
+                        del buffer[:chunk_size]
+
+            if all_samples is not None:
+                if args.sort_by_length:
+                    all_samples.sort(key=lambda sample: len(sample.get("raw_tokens", ())))
+
+                buffer = all_samples
+
+            if buffer:
+                while len(buffer) > chunk_size:
+                    chunk = buffer[:chunk_size]
+                    write_chunk(chunk, final_chunk=False)
+                    del buffer[:chunk_size]
+
+                write_chunk(list(buffer), final_chunk=True)
+                buffer.clear()
+
+        except Exception:
+            for path in reversed(written_paths):
+                with suppress(FileNotFoundError):
+                    path.unlink()
+            raise
+    except FileExistsError as exc:
+        print(f"Error while merging: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"Error while merging: {exc}", file=sys.stderr)
+        return 1
+
+    num_chunks = max(1, len(written_paths))
+    total_samples = total_samples_written
+
+    if num_chunks == 1:
+        target_path = written_paths[0] if written_paths else args.output
+        print(
+            f"Merged {total_samples} samples from {len(input_paths)} files into {target_path}"
+        )
+    else:
+        first_path = written_paths[0]
+        print(
+            f"Merged {total_samples} samples from {len(input_paths)} files into {num_chunks} files starting at {first_path}"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

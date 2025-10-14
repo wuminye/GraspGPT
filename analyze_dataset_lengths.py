@@ -62,8 +62,8 @@ def analyze_sample_lengths(dataset, sample_size=None):
         
         try:
             # Get data through __getitem__
-            # PrecomputedDataset returns: (tokens, max_sequence_length, scene_grasps)
-            tokens, max_seq_len, scene_grasps = dataset[idx]
+            # PrecomputedDataset returns: (tokens, seq_len, loss_mask)
+            tokens, max_seq_len, _ = dataset[idx]
             
             # Get token sequence length
             if isinstance(tokens, torch.Tensor):
@@ -163,7 +163,7 @@ def analyze_grasp_distribution(dataset, sample_size=None):
         
         try:
             # Get tokens from dataset
-            tokens, max_seq_len, scene_grasps = dataset[idx]
+            tokens, max_seq_len, _ = dataset[idx]
             tokens = tokens.squeeze()  # Remove batch dimension if present
             # Convert tokens to list if it's a tensor
             if isinstance(tokens, torch.Tensor):

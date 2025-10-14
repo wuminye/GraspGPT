@@ -240,10 +240,13 @@ def reconstruct_grasp_from_points(points: np.ndarray) -> Optional[Grasp]:
     homogeneous = np.hstack([points, np.ones((points.shape[0], 1), dtype=points.dtype)])
     transformed = (COORD_TRANSFORM_INV @ homogeneous.T).T[:, :3]
 
+    left, right, bottom = transformed
+
     best_candidate: Optional[Tuple[np.ndarray, np.ndarray, float, float]] = None
     best_cost = np.inf
 
     for order in permutations(range(3)):
+
         left, right, bottom = transformed[list(order)]
 
         '''
@@ -330,7 +333,7 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     
     # 加载dataset
     try:
-        dataset = PrecomputedDataset(dataset_path, max_sequence_length=12800)
+        dataset = PrecomputedDataset(dataset_path, max_sequence_length=16800, real_filter_mode='amodal_only',apply_del_amodal_sequence=True)
         print(f"Dataset加载成功，包含 {len(dataset)} 个样本")
     except Exception as e:
         print(f"加载dataset失败: {e}")

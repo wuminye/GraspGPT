@@ -55,7 +55,7 @@ def main():
     parser.add_argument("--use_workspace", action="store_true", help="重建场景点云时是否裁剪到工作空间（loadScenePointCloud 的 use_workspace）")
     parser.add_argument("--no_mask", action="store_true", help="重建场景点云时禁用 mask（默认使用mask）")
     parser.add_argument("--inpaint", action="store_true", help="重建场景点云时对深度图做补洞（inpainting）")
-    parser.add_argument("--outdir", default="output/real_data/train", help="输出目录")
+    parser.add_argument("--outdir", default="output/real_data/train_old", help="输出目录")
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)

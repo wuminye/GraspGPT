@@ -775,7 +775,7 @@ def save_visualization_files(pcd_data, rotation_matrix, translation_vector, min_
 def main():
     # File paths
     ground_ply_path = "output/ground.ply"
-    output_dir = "output/real_data/train"
+    output_dir = "output/real_data/train_old"
     xml_output_path = Path(output_dir) / "transformation.xml"
 
     voxel_size = 0.0075
