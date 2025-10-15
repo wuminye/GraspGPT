@@ -325,7 +325,6 @@ class PrecomputedDataset(Dataset):
 
         tokens = tokens.unsqueeze(-1)       
 
-        import pdb; pdb.set_trace()
         return tokens, seq_len, mask.unsqueeze(-1)  
 
     def get_vocab_size(self) -> int:
