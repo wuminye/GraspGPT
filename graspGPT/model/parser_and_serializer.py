@@ -182,6 +182,11 @@ class Seq:
 class ParseError(Exception):
     """Raised when the token stream violates the grammar."""
 
+    def __init__(self, message: str, position: Optional[int] = None, token: Optional[Token] = None):
+        super().__init__(message)
+        self.position = position
+        self.token = token
+
 
 class Parser:
     """Recursive‑descent parser for the specified grammar."""
@@ -200,7 +205,7 @@ class Parser:
     def expect(self, expected: Token) -> Token:
         tok = self.current()
         if tok != expected:
-            raise ParseError(f"Expected {expected!r}, got {tok!r} at position {self.pos}")
+            raise ParseError(f"Expected {expected!r}, got {tok!r}", position=self.pos, token=tok)
         self.advance()
         return tok
 
@@ -209,6 +214,7 @@ class Parser:
         """Parse a SEQ and ensure the final token is 'end'.
         如果解析过程中遇到 ParseError，则忽略后续 token，只用之前成功解析的数据构造合法 AST。
         """
+        
         items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = []
         try:
             scene = self._parse_scene()
@@ -230,11 +236,11 @@ class Parser:
             trailing = self.current()
             if trailing not in (None, 'end'):
                 raise ParseError(
-                    f"Unexpected token {trailing!r} after parsing SEQ at position {self.pos}"
+                    f"Unexpected token {trailing!r} after parsing SEQ", position=self.pos, token=trailing
                 )
 
         except ParseError as e:
-            print(f"ParseError: {e}")
+            self._log_parse_error(e)
             self._consume_until_end()
 
         # Always consume a terminal 'end' if present
@@ -258,7 +264,7 @@ class Parser:
         self.advance()
         cbs: List[CB] = []
         if not self._starts_cb(self.current()):
-            raise ParseError("SB must contain at least one CB after tag")
+            raise ParseError("SB must contain at least one CB after tag", position=self.pos, token=self.current())
         while self._starts_cb(self.current()):
             cbs.append(self._parse_cb())
         return SB(tag, cbs)  # type: ignore[arg-type]
@@ -270,7 +276,7 @@ class Parser:
         while self.current() in get_token_manager().shape_tags:
             sb = self._parse_sb()
             if not self._is_object_tag(sb.tag):
-                raise ParseError("UNSEG 内部的 SB 标签必须为 'object' + INT")
+                raise ParseError("UNSEG 内部的 SB 标签必须为 'object' + INT", position=self.pos, token=sb.tag)
             sbs.append(sb)
         self.expect('endunseg')
         return UNSEG(sbs)
@@ -280,7 +286,7 @@ class Parser:
         self.expect('amodal')
         sb = self._parse_sb()
         if sb.tag != 'unlabel':
-            raise ParseError("AMODAL 中的 SB 必须使用 'unlabel' 标签")
+            raise ParseError("AMODAL 中的 SB 必须使用 'unlabel' 标签", position=self.pos, token=sb.tag)
         self.expect('endamodal')
         return AMODAL(sb)
 
@@ -292,7 +298,7 @@ class Parser:
             try:
                 gbs.append(self._parse_gb())
             except ParseError as e:
-                print(f"ParseError while parsing GB: {e}")
+                self._log_parse_error(e, context="while parsing GB")
                 # Stop parsing GBs and discard the remaining tokens in this sequence.
                 self._consume_until_end()
                 break
@@ -303,11 +309,11 @@ class Parser:
         self.expect('grasp')
         tag = self.current()
         if tag not in get_token_manager().shape_tags:
-            raise ParseError(f"Expected shape tag after 'grasp', got {tag!r}")
+            raise ParseError(f"Expected shape tag after 'grasp', got {tag!r}", position=self.pos, token=tag)
         self.advance()
         cbs: List[CB] = []
         if not self._starts_cb(self.current()):
-            raise ParseError("GB must contain at least one CB after tag")
+            raise ParseError("GB must contain at least one CB after tag", position=self.pos, token=self.current())
         while self._starts_cb(self.current()):
             cbs.append(self._parse_cb())
         return GB(tag, cbs)  # type: ignore[arg-type]
@@ -316,7 +322,7 @@ class Parser:
     def _parse_cb(self) -> CB:
         coord_tok = self.current()
         if not self._is_coord(coord_tok):
-            raise ParseError(f"Expected coordinate tuple, got {coord_tok!r}")
+            raise ParseError(f"Expected coordinate tuple, got {coord_tok!r}", position=self.pos, token=coord_tok)
         self.advance()
         serial: Optional[Serial] = None
         if isinstance(self.current(), str) and get_token_manager().is_serial_token(self.current()):
@@ -340,6 +346,15 @@ class Parser:
     @staticmethod
     def _is_object_tag(tag: str) -> bool:
         return isinstance(tag, str) and tag.startswith('object') and tag[6:].isdigit()
+
+    def _log_parse_error(self, error: ParseError, context: Optional[str] = None) -> None:
+        """统一打印解析错误，附带位置信息，便于排查."""
+        location = f" at position {error.position}" if error.position is not None else ""
+        token_info = ""
+        if getattr(error, "token", None) is not None:
+            token_info = f" (token={error.token!r})"
+        ctx = f" {context}" if context else ""
+        print(f"ParseError{ctx}{location}{token_info}: {error}")
 
     def _consume_until_end(self) -> None:
         while self.current() not in (None, 'end'):
@@ -538,6 +553,8 @@ class MaskSerializer:
         """Serialize a Seq AST back to a flat token mask list."""
         tokens: List[TokenMask] = []
 
+
+
         items: List[Union[Scene, UNSEG, AMODAL, GRASP, SB]] = list(seq.items)
         if not any(isinstance(item, Scene) for item in items):
             legacy_sbs = [item for item in items if isinstance(item, SB)]
@@ -568,7 +585,7 @@ class MaskSerializer:
         
         # Add all CB tokens
         for cb in sb.cbs:
-            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'incomplete')))
+            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'unlabel')))
         
         return tokens
 

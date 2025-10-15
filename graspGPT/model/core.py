@@ -596,7 +596,7 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.5, p_up=0.3, p_down=0.3):
 
     # 是否改动整个tuple
     if np.random.rand() >= p_modify:
-        return tuple(t)
+        return tuple(t.tolist())
 
     # 随机扰动：每个元素独立决定 +1、-1 或不变
     r = np.random.rand(*t.shape)
@@ -605,7 +605,7 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.5, p_up=0.3, p_down=0.3):
     deltas[(r >= p_up) & (r < p_up + p_down)] = -1
 
     # 应用扰动并截断到合法范围
-    new_t = np.clip(t + deltas, 0, max_values)
+    new_t = np.clip(t + deltas, 0, max_values).astype(np.int32).tolist()
 
     return tuple(new_t)
 

@@ -302,8 +302,12 @@ class PrecomputedDataset(Dataset):
             tokens = generate_seg_sequence(tokens,self.volume_dims)
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
+
+
+
         ast = Parser(tokens).parse()
         mask = MaskSerializer.serialize(ast)
+        mask = torch.tensor(mask, dtype=torch.bool)
         
 
         tokens = encode_sequence(tokens, self.token_mapping)
@@ -319,8 +323,7 @@ class PrecomputedDataset(Dataset):
             tokens = tokens[:self.max_sequence_length]
             seq_len = self.max_sequence_length
 
-        tokens = tokens.unsqueeze(-1)
-       
+        tokens = tokens.unsqueeze(-1)       
 
         return tokens, seq_len, mask
 
