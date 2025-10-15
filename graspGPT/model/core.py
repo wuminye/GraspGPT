@@ -124,6 +124,9 @@ def save_voxels(sequence: list, file_path: str):
     return len(coords_with_colors)
 
 
+
+
+
 def generate_amodal_sequence(
     token_sequence: List[Union[str, Tuple[int, int, int]]],
     voxel_dims: Tuple[Union[int, float], Union[int, float], Union[int, float]],
@@ -574,7 +577,39 @@ def generate_amodal_sequence(
         return serialized, projection_details
     return serialized
 
-def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]]):
+
+def maybe_modify_tuple_np(t, max_values, p_modify=0.5, p_up=0.3, p_down=0.3):
+    """
+    使用NumPy向量化随机修改一个整数tuple，并确保结果在[0, max_values]范围内。
+
+    参数:
+        t: 原始tuple (例如 (1, 2, 3))
+        max_values: 对应每个元素的最大值 (例如 (5, 10, 7))
+        p_modify: 是否整体改动的概率 (默认 0.5)
+        p_up: 每个元素 +1 的概率 (默认 0.3)
+        p_down: 每个元素 -1 的概率 (默认 0.3)
+    返回:
+        修改后的tuple
+    """
+    t = np.array(t, dtype=int)
+    max_values = np.array(max_values, dtype=int) -1  # 包括边界
+
+    # 是否改动整个tuple
+    if np.random.rand() >= p_modify:
+        return tuple(t)
+
+    # 随机扰动：每个元素独立决定 +1、-1 或不变
+    r = np.random.rand(*t.shape)
+    deltas = np.zeros_like(t)
+    deltas[r < p_up] = 1
+    deltas[(r >= p_up) & (r < p_up + p_down)] = -1
+
+    # 应用扰动并截断到合法范围
+    new_t = np.clip(t + deltas, 0, max_values)
+
+    return tuple(new_t)
+
+def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]], volume_dims: Tuple[int, int, int]) -> List[Union[str, Tuple[int, int, int]]]:
     """将 SCENE 聚合为单个 'unlabel' 点云，并把原始数据迁移到 UNSEG。"""
 
     parser = Parser(token_sequence)
@@ -594,6 +629,7 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     for sb in original_scene.sbs:
         for cb in sb.cbs:
             coord = cb.coord
+            coord = maybe_modify_tuple_np(coord, max_values=volume_dims)
             serial = cb.serial
             if coord not in unique_serials:
                 unique_serials[coord] = serial
@@ -603,7 +639,7 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     if not unique_serials:
         raise ValueError("SCENE 段中没有可用的点云数据")
 
-    merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys())]
+    merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys()) if random.random() >= 0.1]
     new_scene = Scene(sbs=[SB(tag='unlabel', cbs=merged_cbs)])
 
     scene_unseg = UNSEG(sbs=[_clone_sb(sb) for sb in original_scene.sbs])
