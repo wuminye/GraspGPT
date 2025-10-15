@@ -36,47 +36,7 @@ _SERIAL_TOKEN_IDS = {
 _INCOMPLETE_TOKEN_ID = _TOKEN_TO_ID.get('incomplete')
 
 
-def _build_incomplete_loss_mask(token_tensor: torch.Tensor) -> torch.Tensor:
-    """Build a loss mask that keeps SCENE/SB tokens tagged as 'incomplete'."""
-    flat_tokens = token_tensor.view(-1).tolist()
-    mask = torch.zeros(len(flat_tokens), dtype=torch.float32, device=token_tensor.device)
 
-    if _SCENE_TOKEN_ID is None or _INCOMPLETE_TOKEN_ID is None:
-        return mask
-
-    in_scene = False
-    current_sb_tag = None
-
-    for idx, token_id in enumerate(flat_tokens):
-        if token_id == _SCENE_TOKEN_ID:
-            in_scene = True
-            current_sb_tag = None
-            continue
-
-        if not in_scene:
-            continue
-
-        if token_id in _SCENE_TERMINATOR_IDS:
-            in_scene = False
-            current_sb_tag = None
-            continue
-
-        if token_id in _SHAPE_TAG_ID_TO_NAME:
-            current_sb_tag = _SHAPE_TAG_ID_TO_NAME[token_id]
-            if current_sb_tag == 'incomplete':
-                mask[idx] = 1.0
-            continue
-
-        if token_id in _SERIAL_TOKEN_IDS or token_id >= _COORDINATE_START_ID:
-            if current_sb_tag == 'incomplete':
-                mask[idx] = 1.0
-            continue
-
-        # Other tokens within SCENE (unlikely) are ignored unless we're inside an incomplete SB
-        if current_sb_tag == 'incomplete':
-            mask[idx] = 1.0
-
-    return mask
 
 
 
@@ -89,14 +49,14 @@ def pad_collate(batch):
         x: (b x t x g)
         y: (b x t x g)
     """
-    tokens, sequence_length, _ = zip(*batch)
+    tokens, sequence_length, masks = zip(*batch)
     max_length = max(sequence_length)
 
     chunks = []
     loss_masks = []
     for i in range(len(tokens)):
         chunk = tokens[i]
-        mask = _build_incomplete_loss_mask(chunk)
+        mask = masks[i]
         
         # If this is the last chunk and it's shorter than max_sequence_length, pad it
         if chunk.shape[0] < max_length:

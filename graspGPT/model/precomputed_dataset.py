@@ -13,11 +13,11 @@ import random
 
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
-    from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
+    from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
     from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
-    from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG
+    from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
     from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
 
 
@@ -299,7 +299,11 @@ class PrecomputedDataset(Dataset):
         '''
 
         if num_others==0:
-            tokens = generate_amodal_sequence(tokens,self.volume_dims)
+            tokens = generate_seg_sequence(tokens,self.volume_dims)
+        #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
+
+        ast = Parser(tokens).parse()
+        mask = MaskSerializer.serialize(ast)
         
 
         tokens = encode_sequence(tokens, self.token_mapping)
@@ -318,7 +322,7 @@ class PrecomputedDataset(Dataset):
         tokens = tokens.unsqueeze(-1)
        
 
-        return tokens, seq_len, None
+        return tokens, seq_len, mask
 
     def get_vocab_size(self) -> int:
         """Get vocabulary size from token_manager"""

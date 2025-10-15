@@ -19,3 +19,6 @@
 *.jpg
 /tests/__pycache__
 /tests
+/logs
+*.err
+*.out

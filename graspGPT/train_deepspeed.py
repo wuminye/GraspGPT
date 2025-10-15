@@ -79,14 +79,14 @@ def get_default_config():
     
     # Dataset configuration
     C.dataset = CN()
-    C.dataset.data_path = "../output/precomputed_data/"
+    C.dataset.data_path = "../output/precomputed_data_comb_train/"
     C.dataset.max_sequence_length = 16384
     C.dataset.num_workers = 12
     C.dataset.weights_only = False
     
     # System configuration
     C.system = CN()
-    C.system.output_dir = "../output/checkpoints_amodal_unseg"
+    C.system.output_dir = "../output/exp18"
     C.system.save_every = 3000  # Save checkpoint every N iterations
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
@@ -98,11 +98,11 @@ def get_default_config():
     
     # Wandb configuration
     C.wandb = CN()
-    C.wandb.enabled = True
+    C.wandb.enabled = False
     C.wandb.project = 'graspgpt-deepspeed'
     C.wandb.entity = None  # Set to your wandb username/team
     C.wandb.name = None    # Run name, will be auto-generated if None
-    C.wandb.tags = ['amodal_useg', 'multi-gpu']      # List of tags for the run
+    C.wandb.tags = ['kv_head', 'multi-gpu']      # List of tags for the run
     
     return C
 

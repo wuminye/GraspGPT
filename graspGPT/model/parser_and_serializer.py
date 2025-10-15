@@ -84,6 +84,8 @@ Coord = Tuple[int, int, int]
 Serial = str  # strings like '<serial3>', '<serial5>', '<serial9>' - dynamic format: '<serial' INT '>'
 Token = Union[str, Coord]
 
+TokenMask = bool
+
 
 # Token定义已移至TokenManager中统一管理
 
@@ -525,7 +527,112 @@ class Serializer:
         
         return tokens
 
+# ---------------------------------------------------------------------------
+# Serializer implementation for masking
+# ---------------------------------------------------------------------------
+class MaskSerializer:
+    """Serializes AST nodes back to flat token mask lists."""
+    
+    @staticmethod
+    def serialize(seq: Seq) -> List[TokenMask]:
+        """Serialize a Seq AST back to a flat token mask list."""
+        tokens: List[TokenMask] = []
 
+        items: List[Union[Scene, UNSEG, AMODAL, GRASP, SB]] = list(seq.items)
+        if not any(isinstance(item, Scene) for item in items):
+            legacy_sbs = [item for item in items if isinstance(item, SB)]
+            remaining = [item for item in items if not isinstance(item, SB)]
+            items = [Scene(sbs=legacy_sbs)] + remaining
+
+        # Serialize all items in the sequence
+        for item in items:
+            if isinstance(item, Scene):
+                tokens.extend(MaskSerializer._serialize_scene(item))
+            elif isinstance(item, SB):
+                tokens.extend(MaskSerializer._serialize_sb(item))
+            elif isinstance(item, UNSEG):
+                tokens.extend(MaskSerializer._serialize_unseg(item))
+            elif isinstance(item, AMODAL):
+                tokens.extend(MaskSerializer._serialize_amodal(item))
+            elif isinstance(item, GRASP):
+                tokens.extend(MaskSerializer._serialize_grasp(item))
+
+        # Add the final 'end' token
+        tokens.append(True)
+        return tokens
+    
+    @staticmethod
+    def _serialize_sb(sb: SB) -> List[TokenMask]:
+        """Serialize an SB node to tokens."""
+        tokens: List[TokenMask] = [True]  # Start with the tag ('circle' or 'square')
+        
+        # Add all CB tokens
+        for cb in sb.cbs:
+            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'incomplete')))
+        
+        return tokens
+
+    @staticmethod
+    def _serialize_scene(scene: Scene) -> List[TokenMask]:
+        tokens: List[TokenMask] = [True]
+        for sb in scene.sbs:
+            tokens.extend(MaskSerializer._serialize_sb(sb))
+        return tokens
+    
+    @staticmethod
+    def _serialize_unseg(unseg: UNSEG) -> List[TokenMask]:
+        """Serialize an UNSEG node to tokens."""
+        tokens: List[TokenMask] = [True]
+
+        # Add all SB tokens inside UNSEG (must all use objectXX tags)
+        for sb in unseg.sbs:
+            tokens.extend(MaskSerializer._serialize_sb(sb))
+
+        tokens.append(True)
+        return tokens
+
+    @staticmethod
+    def _serialize_amodal(amodal: AMODAL) -> List[TokenMask]:
+        tokens: List[TokenMask] = [True]
+        tokens.extend(MaskSerializer._serialize_sb(amodal.sb))
+        tokens.append(True)
+        return tokens
+    
+    @staticmethod
+    def _serialize_grasp(grasp: GRASP) -> List[TokenMask]:
+        """Serialize a GRASP node to tokens."""
+        tokens: List[TokenMask] = [True]
+        
+        # Add all GB tokens
+        for gb in grasp.gbs:
+            tokens.extend(MaskSerializer._serialize_gb(gb))
+        
+        return tokens
+    
+    @staticmethod
+    def _serialize_gb(gb: GB) -> List[TokenMask]:
+        """Serialize a GB node to tokens."""
+        tokens: List[TokenMask] = [True, True]
+        
+        # Add all CB tokens
+        for cb in gb.cbs:
+            tokens.extend(MaskSerializer._serialize_cb(cb))
+        
+        return tokens
+    
+    @staticmethod
+    def _serialize_cb(cb: CB, maskout: bool = False) -> List[TokenMask]:
+        """Serialize a CB node to tokens."""
+        if maskout:
+            tokens: List[TokenMask] = [False]
+        else:
+            tokens: List[TokenMask] = [True]  # Start with the coordinate
+
+        # Add serial if present
+        if cb.serial is not None:
+            tokens.append(True if not maskout else False)
+        
+        return tokens
 
     
 # ---------------------------------------------------------------------------
