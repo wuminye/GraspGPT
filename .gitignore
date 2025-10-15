@@ -19,3 +19,5 @@
 *.jpg
 /tests/__pycache__
 /tests
+grasp.txt
+.vscode/settings.json
