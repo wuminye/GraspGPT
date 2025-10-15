@@ -633,7 +633,7 @@ class graspGPT(nn.Module):
 
         if loss_mask is not None:
             mask = loss_mask.reshape(-1).to(logits.device)
-            assert mask.dtype == torch.bool, "loss_mask should be bool tensor"
+            assert mask.dtype == torch.bool, f"loss_mask should be bool tensor, {mask.dtype}"
             valid = mask & (target_tokens != -1)
             if valid.any():
                 return F.cross_entropy(logits_flat[valid], target_tokens[valid])

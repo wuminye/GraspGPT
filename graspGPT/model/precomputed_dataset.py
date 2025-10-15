@@ -325,7 +325,7 @@ class PrecomputedDataset(Dataset):
 
         tokens = tokens.unsqueeze(-1)       
 
-        return tokens, seq_len, mask.unsqueeze(-1)  
+        return tokens, seq_len, mask
 
     def get_vocab_size(self) -> int:
         """Get vocabulary size from token_manager"""
