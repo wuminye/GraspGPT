@@ -299,7 +299,10 @@ class PrecomputedDataset(Dataset):
         '''
 
         if num_others==0:
-            tokens = generate_seg_sequence(tokens,self.volume_dims)
+            rng = random.random()
+            if rng < 0.5: # 数据增强
+                tokens = generate_seg_sequence(tokens,self.volume_dims)
+            
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
 

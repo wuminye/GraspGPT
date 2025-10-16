@@ -86,7 +86,7 @@ def get_default_config():
     
     # System configuration
     C.system = CN()
-    C.system.output_dir = "../output/exp19"
+    C.system.output_dir = "../output/exp20"
     C.system.save_every = 3000  # Save checkpoint every N iterations
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
