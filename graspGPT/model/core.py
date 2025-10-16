@@ -579,12 +579,12 @@ def generate_amodal_sequence(
 
 
 def random_translation_argument(item, max_values,scale=5):
+    translation = [random.randint(-scale, scale) for _ in range(3)]
+    translation[-1] = 0  # z 轴不变
     for sb in item.sbs:
         for cb in sb.cbs:
             new_coord = []
             flag=False
-            translation = [random.randint(-scale, scale) for _ in range(3)]
-            translation[-1] = 0  # z 轴不变
             for c, max_v, delta in zip(cb.coord, max_values, translation):
                 new_c = c + delta
                 if new_c < 0:
