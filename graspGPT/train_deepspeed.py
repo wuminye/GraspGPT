@@ -45,6 +45,8 @@ except ImportError:
         from model.utils import CfgNode as CN
 
 
+
+
 def get_default_config():
     """
     Get default configuration for DeepSpeed training
@@ -61,7 +63,15 @@ def get_default_config():
     C.model.block_size = 16384   # Maximum sequence length
     C.model.use_rope = True    # Use RoPE position encoding
     C.model.use_flash_attention = True
+    C.model.tags = CN() # Tags for model variants
     
+    C.model.tags.sort_unseg = False  # Whether to sort unsegmented scenes
+    C.model.tags.translation_argument = False # Whether to include translation argumentation
+    C.model.tags.translate_scale = 5
+    C.model.tags.add_unlabel_noise = False # Whether to randomly translate scenes
+
+
+
     # Training configuration  
     C.trainer = CN()
     C.trainer.learning_rate = 2e-4
@@ -86,7 +96,7 @@ def get_default_config():
     
     # System configuration
     C.system = CN()
-    C.system.output_dir = "../output/exp20"
+    C.system.output_dir = "../output/exp23"
     C.system.save_every = 3000  # Save checkpoint every N iterations
     C.system.log_every = 100    # Log progress every N iterations
     C.system.seed = 42
@@ -290,7 +300,8 @@ def create_model_and_dataset(config):
     
     dataset = PrecomputedDataset(
         data_path=config.dataset.data_path,
-        max_sequence_length=config.dataset.max_sequence_length
+        max_sequence_length=config.dataset.max_sequence_length,
+        tags=config.model.tags
     )
     
     if rank == 0:
@@ -441,6 +452,13 @@ def main():
     parser.add_argument('--deepspeed_config', type=str, default=None,
                        help='Path to DeepSpeed config file (overrides config)')
     
+    parser.add_argument('--sort_unseg', action='store_true',
+                       help='Enable sorting of unsegmented scenes (overrides config)')
+    parser.add_argument('--add_unlabel_noise', action='store_true',
+                       help='Enable adding noise to unlabelled scenes (overrides config)')
+    parser.add_argument('--translation_argument', action='store_true',
+                       help='Enable translation argumentation (overrides config)')
+    
     # Parse known args to handle DeepSpeed arguments
     args, unknown_args = parser.parse_known_args()
     
@@ -479,6 +497,13 @@ def main():
         config.wandb.name = args.wandb_name
     if args.deepspeed_config:
         config.deepspeed.config_path = args.deepspeed_config
+
+    if args.sort_unseg:
+        config.model.tags.sort_unseg = True
+    if args.add_unlabel_noise:
+        config.model.tags.add_unlabel_noise = True
+    if args.translation_argument:
+        config.model.tags.translation_argument = True
     
     config.deepspeed.local_rank = args.local_rank
     

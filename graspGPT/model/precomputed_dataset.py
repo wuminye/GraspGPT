@@ -32,7 +32,8 @@ class PrecomputedDataset(Dataset):
     
     def __init__(self, 
                  data_path: str,
-                 max_sequence_length: int = 1024):
+                 max_sequence_length: int = 1024,
+                 tags = None):
         """
         Initialize the PrecomputedDataset
         
@@ -42,6 +43,8 @@ class PrecomputedDataset(Dataset):
         """
         self.data_path = Path(data_path)
         self.max_sequence_length = max_sequence_length
+
+        self.tags = tags
         
         # Load all precomputed data files
         self.volume_dims = None
@@ -240,7 +243,7 @@ class PrecomputedDataset(Dataset):
                             # 只保留与现有SB相同TAG的GB，且每个TAG最多5个
                             if gb.tag in sb_tags:
                                 current_count = tag_count.get(gb.tag, 0)
-                                if current_count < 100:
+                                if current_count < 150:
                                     filtered_gbs.append(gb)
                                     tag_count[gb.tag] = current_count + 1
                         
@@ -299,9 +302,7 @@ class PrecomputedDataset(Dataset):
         '''
 
         if num_others==0:
-            rng = random.random()
-            if rng < 0.5: # 数据增强
-                tokens = generate_seg_sequence(tokens,self.volume_dims)
+            tokens = generate_seg_sequence(tokens,self.volume_dims, self.tags)
             
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
@@ -316,6 +317,7 @@ class PrecomputedDataset(Dataset):
         tokens = encode_sequence(tokens, self.token_mapping)
 
         #tokens = tokens[:-1]  # Remove the final EOS token for training
+        #mask[-1] = False
 
         seq_len = len(tokens)
 

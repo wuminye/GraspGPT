@@ -32,6 +32,9 @@ deepspeed --num_gpus=$NUM_GPUS train_deepspeed.py \
     --learning_rate 2e-4 \
     --max_iters 300000 \
     --wandb_project "graspgpt-deepspeed" \
+    --sort_unseg \
+    --add_unlabel_noise \
+    --translation_argument \
     "$@"
 
 echo "Training completed!"
