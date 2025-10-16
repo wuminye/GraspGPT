@@ -451,7 +451,10 @@ def main():
                        help='Local rank for distributed training')
     parser.add_argument('--deepspeed_config', type=str, default=None,
                        help='Path to DeepSpeed config file (overrides config)')
-    
+
+    parser.add_argument('--model_type', type=str, default='gpt2',
+                       help='Model type (overrides config)')
+
     parser.add_argument('--sort_unseg', action='store_true',
                        help='Enable sorting of unsegmented scenes (overrides config)')
     parser.add_argument('--add_unlabel_noise', action='store_true',
@@ -504,7 +507,9 @@ def main():
         config.model.tags.add_unlabel_noise = True
     if args.translation_argument:
         config.model.tags.translation_argument = True
-    
+    if args.model_type:
+        config.model.model_type = args.model_type
+
     config.deepspeed.local_rank = args.local_rank
     
     # Set random seed for reproducibility
