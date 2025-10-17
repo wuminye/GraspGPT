@@ -681,9 +681,9 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
 
 
 
-    new_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = [new_scene, scene_unseg]
+    new_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = [new_scene]
 
-    '''
+    
     for item in original_seq.items:
         if isinstance(item, Scene):
             continue
@@ -699,7 +699,7 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
             new_items.append(GRASP(gbs=new_gbs))
         else:
             new_items.append(item)
-    '''
+    
 
     return Serializer.serialize(Seq(items=new_items))
 
