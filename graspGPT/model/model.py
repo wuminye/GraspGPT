@@ -450,7 +450,11 @@ class graspGPT(nn.Module):
                 'gpt2-large':   dict(n_layer=36, n_head=20, n_embd=1280), # 774M params
                 'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
                 #MY models
-                'gpt2-shallow-wide':    dict(n_layer=4, n_head=12, n_embd=1024),   
+                'gpt2-shallow-wide':    dict(n_layer=6, n_head=20, n_embd=1280),  
+                'gpt2-shallow-wide-2048':    dict(n_layer=6, n_head=16, n_embd=2048), 
+                'gpt2-shallow-wide-2048-32':    dict(n_layer=6, n_head=32, n_embd=2048),
+                'gpt2-shallow-wide-4096':    dict(n_layer=6, n_head=16, n_embd=4096), 
+                'gpt2-deep-narrow':    dict(n_layer=24, n_head=8, n_embd=256), 
                 # Gophers
                 'gopher-44m':   dict(n_layer=8, n_head=16, n_embd=512),
                 # (there are a number more...)
