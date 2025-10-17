@@ -600,10 +600,7 @@ def convert_PC_to_amodal_sequence(
 
     for coordinates in aligned_scene:
         x, y, z = (int(coordinates[0]), int(coordinates[1]), int(coordinates[2]))
-        if z <2:
-            continue
-        if y <4:
-            continue
+
         cbs.append(CB(coord=(x, y, z)))
 
     cbs.sort(key=lambda cb: cb.coord)
