@@ -23,7 +23,7 @@ from graspnetAPI.utils.utils import get_obj_pose_list
 import  blender.process_grasp as mygrasp
 
 try:
-    from graspGPT.model.token_manager import get_token_manager, encode_sequence
+    from graspGPT.model.token_manager import get_token_manager, encode_sequence, decode_sequence
     from graspGPT.model.parser_and_serializer import Serializer, Seq, Scene, SB, CB,GB, GRASP, AMODAL
     from graspGPT.model.core import generate_seg_sequence
     from extract_sample_and_export import visualize_tokens 
@@ -43,11 +43,14 @@ class SceneData:
     ann_id: int
     objects_pcd: o3d.geometry.PointCloud
     scene_pcd: o3d.geometry.PointCloud
+    fused_pcd: o3d.geometry.PointCloud
     output_dir: Path
     grasps: Any
 
 
 GRASP_LABELS_CACHE: Dict[Tuple[str, str, int], Any] = {}
+COLLISION_LABELS_CACHE: Dict[Tuple[str, str, int], Any] = {}
+MERGED_OBJECTS_CACHE: Dict[Tuple[str, str, int, int], o3d.geometry.PointCloud] = {}
 
 
 def merge_pointclouds(pcd_list: List[Tuple[o3d.geometry.PointCloud, int]]) -> o3d.geometry.PointCloud:
@@ -95,14 +98,28 @@ def stage1_generate_scenes(
     args: argparse.Namespace,
     graspnet_cache: Optional[Dict[Tuple[str, str, int], GraspNet]] = None,
     grasp_labels_cache: Optional[Dict[Tuple[str, str, int], Any]] = None,
+    collision_labels_cache: Optional[Dict[Tuple[str, str, int], Any]] = None,
+    merged_objects_cache: Optional[
+        Dict[Tuple[str, str, int, int], o3d.geometry.PointCloud]
+    ] = None,
 ) -> List[SceneData]:
     scene_ids = args.scene_ids if args.scene_ids else [args.scene_id]
     output_dir = Path(args.outdir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     results: List[SceneData] = []
-    labels_cache = (
+    grasp_labels_cache_dict = (
         grasp_labels_cache if grasp_labels_cache is not None else GRASP_LABELS_CACHE
+    )
+    collision_labels_cache_dict = (
+        collision_labels_cache
+        if collision_labels_cache is not None
+        else COLLISION_LABELS_CACHE
+    )
+    merged_objects_cache_dict = (
+        merged_objects_cache
+        if merged_objects_cache is not None
+        else MERGED_OBJECTS_CACHE
     )
     for scene_id in scene_ids:
         print(
@@ -145,14 +162,25 @@ def stage1_generate_scenes(
         scene_reader = xmlReader(os.path.join(scene_dir,'annotations','%04d.xml' %(args.ann_id,)))
         pose_vectors = scene_reader.getposevectorlist()
 
-        obj_pcd_list = graspnet.loadSceneModel(
-            sceneId=scene_id,
-            camera=args.camera,
-            annId=args.ann_id,
-            align=args.align,
-        )
-        merged_objects = merge_pointclouds(obj_pcd_list)
+        object_ann_id = 0  # merged object clouds come from the canonical annotation
+        cache_key_objects = (args.root, args.camera, scene_id)
+        if cache_key_objects in merged_objects_cache_dict:
+            merged_objects = o3d.geometry.PointCloud(
+                merged_objects_cache_dict[cache_key_objects]
+            )
+        else:
+            obj_pcd_list = graspnet.loadSceneModel(
+                sceneId=scene_id,
+                camera=args.camera,
+                annId=0,
+                align=args.align,
+            )
+            merged_objects = merge_pointclouds(obj_pcd_list)
+            merged_objects_cache_dict[cache_key_objects] = merged_objects
 
+
+        scene_pcd = None
+        '''
         scene_pcd = graspnet.loadScenePointCloud(
             sceneId=scene_id,
             camera=args.camera,
@@ -163,16 +191,24 @@ def stage1_generate_scenes(
             use_mask=not args.no_mask,
             use_inpainting=args.inpaint,
         )
+        '''
         
         grasps = None
         try:
             obj_list,pose_list = get_obj_pose_list(camera_pose_ori,pose_vectors)
             cache_key_labels = (args.root, args.camera, scene_id)
-            if cache_key_labels not in labels_cache:
-                labels_cache[cache_key_labels] = graspnet.loadGraspLabels(
+            if cache_key_labels not in grasp_labels_cache_dict:
+                grasp_labels_cache_dict[cache_key_labels] = graspnet.loadGraspLabels(
                     objIds=obj_list
                 )
-            grasp_labels = labels_cache[cache_key_labels]
+            grasp_labels = grasp_labels_cache_dict[cache_key_labels]
+
+            if cache_key_labels not in collision_labels_cache_dict:
+                collision_labels_cache_dict[cache_key_labels] = graspnet.loadCollisionLabels(
+                    scene_id
+                )
+            collision_labels = collision_labels_cache_dict[cache_key_labels]
+
             grasps = graspnet.loadGrasp(
                 sceneId=scene_id,
                 annId=args.ann_id,
@@ -180,6 +216,7 @@ def stage1_generate_scenes(
                 camera=args.camera,
                 fric_coef_thresh=0.2,
                 grasp_labels  = grasp_labels,
+                collision_labels = collision_labels,
             )
             grasps = grasps.transform(camera_pose)  # 将抓取位姿转换到场景坐标系
             
@@ -187,12 +224,21 @@ def stage1_generate_scenes(
         except Exception as exc:  # pylint: disable=broad-except
             print(f"Warning: Failed to sample grasps for scene_{scene_id:04d}: {exc}")
 
+
+        # load fused pcd
+
+        data = np.load('data/fusion_scenes/scene_%04d/%s/points.npy'%(scene_id,args.camera), allow_pickle=True)
+        data = data.item()['xyz']
+        fused_pcd = o3d.geometry.PointCloud()
+        fused_pcd.points = o3d.utility.Vector3dVector(data.astype(np.float32))
+
         results.append(
             SceneData(
                 scene_id=scene_id,
                 ann_id=args.ann_id,
                 objects_pcd=merged_objects,
                 scene_pcd=scene_pcd,
+                fused_pcd=fused_pcd,
                 grasps=grasps,
                 output_dir=output_dir,
             )
@@ -298,7 +344,9 @@ def prepare_loaded_pointclouds(stage1_data: List[SceneData]) -> List[Dict[str, o
         file_path = record.output_dir / f"{prefix}_objects_merged.ply"
 
 
-        grasps = mygrasp.GraspGroup(record.grasps.grasp_group_array)
+
+        grasp_group = record.grasps.nms(translation_thresh=0.02, rotation_thresh=0.4235987755982988)
+        grasps = mygrasp.GraspGroup(grasp_group.grasp_group_array)
         grasps = grasps.random_sample(numGrasp=1500)
         grasp_parampc = grasps.to_parampc_dict() #{obj_id: (obj_id, parampcs of shape (N, 3, 3))}
         grasps_mesh = grasps.to_open3d_geometry_list()
@@ -310,6 +358,7 @@ def prepare_loaded_pointclouds(stage1_data: List[SceneData]) -> List[Dict[str, o
                 "ann_id": record.ann_id,
                 "pcd": downsampled,
                 "scene_pcd": record.scene_pcd,
+                "fused_pcd": record.fused_pcd,
                 "original_bbox_min": original_min,
                 "original_bbox_max": original_max,
                 "file_path": file_path,
@@ -539,6 +588,9 @@ def convert_PC_to_amodal_sequence(
     scene_pcd.translate(translation_vector)
     aligned_scene = filter_points_by_bbox(scene_pcd, bbox_min, bbox_max)
 
+
+    #o3d.io.write_point_cloud('fused_pcd.ply', aligned_scene)
+
     aligned_scene = np.floor((aligned_scene.points - bbox_min) / voxel_size).astype(int)
 
     aligned_scene = np.unique(aligned_scene, axis=0)
@@ -548,7 +600,7 @@ def convert_PC_to_amodal_sequence(
 
     for coordinates in aligned_scene:
         x, y, z = (int(coordinates[0]), int(coordinates[1]), int(coordinates[2]))
-        if z <3:
+        if z <2:
             continue
         if y <4:
             continue
@@ -593,8 +645,7 @@ def convert_PC_to_amodal_sequence(
             
             # Create GB for this individual grasp if we have at least one coordinate
             if cbs:
-                # Sort CBs by coordinates for consistent ordering
-                cbs.sort(key=lambda cb: cb.coord)
+                #cbs.sort(key=lambda cb: cb.coord)
                 gb = GB(tag=shape_tag, cbs=cbs)
                 local_gbs.append(gb)
 
@@ -604,6 +655,100 @@ def convert_PC_to_amodal_sequence(
     flat_tokens = Serializer.serialize(seq)
         
     return flat_tokens
+
+
+def convert_PC_to_unseg_sequence(
+    scene_entry: Any,
+    scene: Scene,
+    grasp_parampc: Any,
+    rotation_matrix: np.ndarray,
+    translation_vector: np.ndarray,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    voxel_size: float,
+    volume_dims: Tuple[int, int, int] = (80, 54, 34)
+):
+    scene_pcd = scene_entry
+    if len(scene_pcd.points) == 0:
+        print(
+            f"Warning: Empty scene point cloud for scene_{scene_entry['scene_id']:04d}_ann_{scene_entry['ann_id']:03d}, skipping"
+        )
+        return False
+
+    scene_pcd.rotate(rotation_matrix, center=(0, 0, 0))
+    scene_pcd.translate(translation_vector)
+    aligned_scene = filter_points_by_bbox(scene_pcd, bbox_min, bbox_max)
+
+
+    #o3d.io.write_point_cloud('fused_pcd.ply', aligned_scene)
+
+    aligned_scene = np.floor((aligned_scene.points - bbox_min) / voxel_size).astype(int)
+
+    aligned_scene = np.unique(aligned_scene, axis=0)
+
+    cbs = []
+   
+
+    for coordinates in aligned_scene:
+        x, y, z = (int(coordinates[0]), int(coordinates[1]), int(coordinates[2]))
+        if z <2:
+            continue
+        if y <4:
+            continue
+        cbs.append(CB(coord=(x, y, z)))
+
+    cbs.sort(key=lambda cb: cb.coord)
+
+    new_scene = Scene(sbs=[SB(tag='unlabel', cbs=cbs)])
+
+
+    '''
+    seen_coords: set = set()
+    combined_cbs: List[CB] = []
+    for sb in scene.sbs:
+        for cb in sb.cbs:
+            if cb.coord in seen_coords:
+                continue
+            seen_coords.add(cb.coord)
+            combined_cbs.append(CB(coord=cb.coord, serial=cb.serial))
+    
+    amodal_sb = SB(tag='unlabel', cbs=list(combined_cbs))
+    new_amodal = AMODAL(sb=amodal_sb)
+    '''
+
+    local_gbs = []
+    for id in grasp_parampc.keys():
+      
+        shape_tag = 'unlabel'  
+
+        for parampc in grasp_parampc[id]:
+            cbs = []
+            for coord in parampc:
+                # Ensure coordinate is a tuple of 3 integers
+                if len(coord) == 3:
+                    x, y, z = int(coord[0]), int(coord[1]), int(coord[2])
+                    if x < 0 or y < 0 or z < 0:
+                        continue
+                    if x >= volume_dims[0] or y >= volume_dims[1] or z >= volume_dims[2]:
+                        continue
+                    
+                    coord_tuple = (x, y, z)
+                    cb = CB(coord=coord_tuple)
+                    cbs.append(cb)
+            
+            # Create GB for this individual grasp if we have at least one coordinate
+            if cbs:
+                #cbs.sort(key=lambda cb: cb.coord)
+                gb = GB(tag=shape_tag, cbs=cbs)
+                local_gbs.append(gb)
+
+    grasp = GRASP(gbs=local_gbs)
+
+    seq = Seq(items=[new_scene, grasp])
+    flat_tokens = Serializer.serialize(seq)
+        
+    return flat_tokens
+
 
 
 def convert_scene_to_sequence(
@@ -672,6 +817,9 @@ def transform_and_save_pointcloud(
     bbox_max: np.ndarray,
 ) -> bool:
     pcd = o3d.geometry.PointCloud(pcd_data["pcd"])
+
+    #o3d.io.write_point_cloud(str(output_path)+'_bg.ply', pcd)
+
     pcd.rotate(rotation_matrix, center=(0, 0, 0))
     pcd.translate(translation_vector)
 
@@ -743,8 +891,8 @@ def transform_and_save_pointcloud(
     token_mapping = token_manager.generate_mapping(volume_dims[0], volume_dims[1], volume_dims[2])
 
     
-    seq_amodal = convert_PC_to_amodal_sequence(
-        scene_entry=pcd_data['scene_pcd'],
+    seq_unseg = convert_PC_to_unseg_sequence(
+        scene_entry=pcd_data['fused_pcd'],
         scene = scene,
         grasp_parampc=pcd_data['grasp_parampc'],
         rotation_matrix=rotation_matrix,
@@ -754,17 +902,18 @@ def transform_and_save_pointcloud(
         voxel_size=voxel_size,
     )
 
-    seq_unseg = generate_seg_sequence(seq_obj)
+    #seq_unseg = generate_seg_sequence(seq_obj)
 
  
     seq_obj = encode_sequence(seq_obj, token_mapping)
-    seq_amodal = encode_sequence(seq_amodal, token_mapping) 
+    #seq_amodal = encode_sequence(seq_amodal, token_mapping) 
     seq_unseg = encode_sequence(seq_unseg, token_mapping) 
     #visualize_tokens(seq, token_mapping,volume_dims,bbox_min,voxel_size,output_dir="./output/tokens_visual")
 
 
     results = []
 
+    '''
     results.append({
         'raw_tokens': seq_obj,
         'ind': -1,
@@ -784,7 +933,7 @@ def transform_and_save_pointcloud(
         'bbox_max': bbox_max,
         'voxel_size': voxel_size
     })
-
+    '''
 
     results.append({
         'raw_tokens': seq_unseg,
@@ -1230,7 +1379,20 @@ def parse_arguments() -> argparse.Namespace:
         "--scene_ids",
         nargs="+",
         type=int,
-        help="Optional list of scene ids to process in a single run",
+        help="Optional list of scene ids to process in a single run (requires --split all)",
+    )
+    parser.add_argument(
+        "--split",
+        choices=[
+            "all",
+            "train",
+            "test",
+            "test_seen",
+            "test_similar",
+            "test_novel",
+        ],
+        default="test_seen",
+        help="Dataset split shortcut for selecting predefined scene id ranges (default: all)",
     )
     parser.add_argument(
         "--camera",
@@ -1272,7 +1434,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outdir",
-        default="output/real_data/train",
+        default="output/real_data/test_m15",
         help="Directory used for all stage 2 outputs",
     )
     parser.add_argument(
@@ -1289,23 +1451,42 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_scene_ids(args: argparse.Namespace) -> List[int]:
+    split_map = {
+        "all": list(range(190)),
+        "train": list(range(100)),
+        "test": list(range(100, 190)),
+        "test_seen": list(range(100, 130)),
+        "test_similar": list(range(130, 160)),
+        "test_novel": list(range(160, 190)),
+    }
+
+    if args.scene_ids:
+        if args.split != "all":
+            raise SystemExit("--scene_ids requires --split all")
+        return list(args.scene_ids)
+    return split_map[args.split]
+
+
 def main() -> None:
     args = parse_arguments()
 
     args.align = True
 
-    #scene_ids = args.scene_ids if args.scene_ids else [args.scene_id]
-    #ann_ids = args.ann_ids if args.ann_ids else [args.ann_id]
-
-
-    scene_ids = [x for x in range(21,100)]
-    ann_ids = [x for x in range(0,255,20)]
+    scene_ids = resolve_scene_ids(args)
+    #scene_ids = [100,102]
+    args.scene_ids = scene_ids
+    ann_ids = [x for x in range(0,255,10)]
+    #ann_ids = [0]
 
     for scene_id in scene_ids:
         graspnet_cache: Dict[Tuple[str, str, int], GraspNet] = {}
         grasp_labels_cache: Dict[Tuple[str, str, int], Any] = {}
+        collision_labels_cache: Dict[Tuple[str, str, int], Any] = {}
+        merged_objects_cache: Dict[Tuple[str, str, int, int], o3d.geometry.PointCloud] = {}
         try:
             for ann_id in ann_ids:
+                
                 print(
                     "\n========================================\n"
                     f"Processing scene_{scene_id:04d}, ann_{ann_id:03d}"
@@ -1318,7 +1499,11 @@ def main() -> None:
                 combo_args.ann_id = ann_id
 
                 stage1_data = stage1_generate_scenes(
-                    combo_args, graspnet_cache, grasp_labels_cache
+                    combo_args,
+                    graspnet_cache,
+                    grasp_labels_cache,
+                    collision_labels_cache,
+                    merged_objects_cache,
                 )
                 if not stage1_data:
                     print(
@@ -1330,6 +1515,8 @@ def main() -> None:
         finally:
             graspnet_cache.clear()
             grasp_labels_cache.clear()
+            collision_labels_cache.clear()
+            merged_objects_cache.clear()
 
 
 if __name__ == "__main__":

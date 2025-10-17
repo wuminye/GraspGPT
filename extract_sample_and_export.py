@@ -21,6 +21,7 @@ import open3d as o3d
 
 # 导入必要的模块
 try:
+    from graspGPT.model.utils import CfgNode as CN
     from graspGPT.model.precomputed_dataset import PrecomputedDataset
     from graspGPT.model.token_manager import get_token_manager, decode_sequence, encode_sequence
     from graspGPT.model.parser_and_serializer import (
@@ -327,10 +328,20 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
         output_dir: 输出目录
     """
     print(f"正在加载dataset: {dataset_path}")
+
+
+    tags = CN() # Tags for model variants
+    
+    tags.sort_unseg = True  # Whether to sort unsegmented scenes
+    tags.translation_argument = True # Whether to include translation argumentation
+    tags.translate_scale = 5
+    tags.add_unlabel_noise = True # Whether to randomly translate scenes
+
+    
     
     # 加载dataset
     try:
-        dataset = PrecomputedDataset(dataset_path, max_sequence_length=12800)
+        dataset = PrecomputedDataset(dataset_path, max_sequence_length=12800, tags=tags)
         print(f"Dataset加载成功，包含 {len(dataset)} 个样本")
     except Exception as e:
         print(f"加载dataset失败: {e}")
@@ -490,8 +501,8 @@ def visualize_tokens(tokens, token_mapping: Dict, volume_dims: Tuple[int, int, i
 
 def main():
     parser = argparse.ArgumentParser(description='从dataset中提取样本并导出点云')
-    parser.add_argument('--dataset_path', default='./output/precomputed_data', help='Dataset路径')
-    parser.add_argument('--sample_idx', type=int, default=24, help='样本索引 (默认: 0)')
+    parser.add_argument('--dataset_path', default='./output/real_data/tmp', help='Dataset路径')
+    parser.add_argument('--sample_idx', type=int, default=220, help='样本索引 (默认: 0)')
     parser.add_argument('--output_dir', default='./output/dataset_visual', help='输出目录 (默认: ./output/dataset_visual)')
 
     args = parser.parse_args()
