@@ -451,6 +451,7 @@ class graspGPT(nn.Module):
                 'gpt2-xl':      dict(n_layer=48, n_head=25, n_embd=1600), # 1558M params
                 #MY models
                 'gpt2-shallow-wide':    dict(n_layer=6, n_head=20, n_embd=1280),  
+                'gpt2-shallow-wide-1600-25':    dict(n_layer=7, n_head=24, n_embd=1536),
                 'gpt2-shallow-wide-2048':    dict(n_layer=6, n_head=16, n_embd=2048), 
                 'gpt2-shallow-wide-2048-32':    dict(n_layer=6, n_head=32, n_embd=2048),
                 'gpt2-shallow-wide-4096':    dict(n_layer=6, n_head=16, n_embd=4096), 
