@@ -39,7 +39,7 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
     --add_unlabel_noise \
-    --enable_grasp 
+    --token_mode unseg_grasp #['unseg_and_scene_grasp', 'unseg_only', 'unseg_grasp']
     #--model_type gpt2-shallow-wide
     #--resume ../output/exp22/iter_15000 \
     #--translation_argument \

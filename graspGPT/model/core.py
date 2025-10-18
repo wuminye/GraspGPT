@@ -578,36 +578,61 @@ def generate_amodal_sequence(
     return serialized
 
 
-def random_translation_argument(item, max_values,scale=5):
+def random_translation_argument(tokens, max_values,scale=5):
+
     translation = [random.randint(-scale, scale) for _ in range(3)]
     translation[-1] = 0  # z 轴不变
-    for sb in item.sbs:
-        for cb in sb.cbs:
-            new_coord = []
-            flag=False
-            for c, max_v, delta in zip(cb.coord, max_values, translation):
-                new_c = c + delta
-                if new_c < 0:
-                    flag=True
-                    break
-                if new_c >= max_v:
-                    flag=True
-                    break
-                new_coord.append(new_c)
-            if flag:
-                continue
-            cb.coord = tuple(new_coord)
-        sb.cbs.sort(key=lambda cb: cb.coord)
+
+    ast = Parser(tokens).parse()
+
+    for item in ast.items:
+    
+        if isinstance(item,Scene) or isinstance(item,UNSEG):
+            for sb in item.sbs:
+                for cb in sb.cbs:
+                    new_coord = []
+                    flag=False
+                    for c, max_v, delta in zip(cb.coord, max_values, translation):
+                        new_c = c + delta
+                        if new_c < 0:
+                            flag=True
+                            break
+                        if new_c >= max_v:
+                            flag=True
+                            break
+                        new_coord.append(new_c)
+                    if flag:
+                        continue
+                    cb.coord = tuple(new_coord)
+                sb.cbs.sort(key=lambda cb: cb.coord)
+        if isinstance(item,GRASP):
+            for gb in item.gbs:
+                for cb in gb.cbs:
+                    new_coord = []
+                    flag=False
+                    for c, max_v, delta in zip(cb.coord, max_values, translation):
+                        new_c = c + delta
+                        if new_c < 0:
+                            flag=True
+                            break
+                        if new_c >= max_v:
+                            flag=True
+                            break
+                        new_coord.append(new_c)
+                    if flag:
+                        continue
+                    cb.coord = tuple(new_coord)
+    return Serializer.serialize(ast)
 
 
-def maybe_modify_tuple_np(t, max_values, p_modify=0.5, p_up=0.3, p_down=0.3):
+def maybe_modify_tuple_np(t, max_values, p_modify=0.3, p_up=0.3, p_down=0.3):
     """
     使用NumPy向量化随机修改一个整数tuple，并确保结果在[0, max_values]范围内。
 
     参数:
         t: 原始tuple (例如 (1, 2, 3))
         max_values: 对应每个元素的最大值 (例如 (5, 10, 7))
-        p_modify: 是否整体改动的概率 (默认 0.5)
+        p_modify: 是否整体改动的概率 (默认 0.3)
         p_up: 每个元素 +1 的概率 (默认 0.3)
         p_down: 每个元素 -1 的概率 (默认 0.3)
     返回:
@@ -631,7 +656,7 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.5, p_up=0.3, p_down=0.3):
 
     return tuple(new_t)
 
-def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]], volume_dims: Tuple[int, int, int], tags = []) -> List[Union[str, Tuple[int, int, int]]]:
+def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]], volume_dims: Tuple[int, int, int], tags) -> List[Union[str, Tuple[int, int, int]]]:
     """将 SCENE 聚合为单个 'unlabel' 点云，并把原始数据迁移到 UNSEG。"""
 
     parser = Parser(token_sequence)
@@ -639,8 +664,7 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
 
     original_scene = next((item for item in original_seq.items if isinstance(item, Scene)), None)
 
-    if tags.translation_argument:
-        random_translation_argument(original_scene,  volume_dims,scale=tags.translate_scale)
+
 
     if original_scene is None:
         raise ValueError("输入的 token 序列缺少 SCENE 段")
@@ -666,8 +690,8 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     if not unique_serials:
         raise ValueError("SCENE 段中没有可用的点云数据")
 
-    if tags.add_unlabel_noise:
-        merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys()) if random.random() >= 0.1]
+    if tags.add_unlabel_cropping:
+        merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys()) if random.random() >= 0.2]
     else:
         merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys())]
     
@@ -681,25 +705,27 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
 
 
 
-    new_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = [new_scene, scene_unseg]
+    new_items: List[Union[Scene, UNSEG, AMODAL, GRASP]] = [new_scene]
 
-    '''
-    for item in original_seq.items:
-        if isinstance(item, Scene):
-            continue
-        if isinstance(item, AMODAL):
-            new_items.append(AMODAL(sb=_clone_sb(item.sb)))
-        elif isinstance(item, UNSEG):
-            new_items.append(UNSEG(sbs=[_clone_sb(sb) for sb in item.sbs]))
-        elif isinstance(item, GRASP):
-            new_gbs: List[GB] = []
-            for gb in item.gbs:
-                cloned_cbs = [_clone_cb(cb) for cb in gb.cbs]
-                new_gbs.append(GB(tag='unlabel', cbs=cloned_cbs))
-            new_items.append(GRASP(gbs=new_gbs))
-        else:
-            new_items.append(item)
-    '''
+    if tags.token_mode in ["unseg_and_scene_grasp", "unseg_only"]:
+        new_items.append(scene_unseg)
+    elif tags.token_mode =="unseg_grasp":
+        for item in original_seq.items:
+            if isinstance(item, Scene):
+                continue
+            if isinstance(item, AMODAL):
+                new_items.append(AMODAL(sb=_clone_sb(item.sb)))
+            elif isinstance(item, UNSEG):
+                new_items.append(UNSEG(sbs=[_clone_sb(sb) for sb in item.sbs]))
+            elif isinstance(item, GRASP):
+                new_gbs: List[GB] = []
+                for gb in item.gbs:
+                    cloned_cbs = [_clone_cb(cb) for cb in gb.cbs]
+                    new_gbs.append(GB(tag='unlabel', cbs=cloned_cbs))
+                new_items.append(GRASP(gbs=new_gbs))
+            else:
+                new_items.append(item)
+
     
 
     return Serializer.serialize(Seq(items=new_items))

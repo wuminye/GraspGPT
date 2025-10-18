@@ -14,11 +14,11 @@ import random
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
     from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
-    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
+    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
     from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
-    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg
+    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument
 
 
 
@@ -286,7 +286,14 @@ class PrecomputedDataset(Dataset):
         if isinstance(tokens, np.ndarray):
             tokens = tokens.tolist()
 
+
         tokens = decode_sequence(tokens, self.token_mapping)
+
+
+
+
+        if self.tags.translation_argument:
+            tokens = random_translation_argument(tokens, self.volume_dims,scale=self.tags.translate_scale)
 
 
     
@@ -302,13 +309,18 @@ class PrecomputedDataset(Dataset):
         '''
 
         rn_flag= True
-        if self.tags.enable_grasp:
+        
+        if self.tags.token_mode == "unseg_and_scene_grasp":
             rn_flag = random.random() <0.5
+        elif self.tags.token_mode == "unseg_only":
+            rn_flag =True
+        elif self.tags.token_mode == "unseg_grasp":
+            rn_flag = True
 
         if num_others==0:
             if rn_flag:
                 tokens = generate_seg_sequence(tokens,self.volume_dims, self.tags)
-            
+
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
 
@@ -322,7 +334,7 @@ class PrecomputedDataset(Dataset):
         tokens = encode_sequence(tokens, self.token_mapping)
 
         #tokens = tokens[:-1]  # Remove the final EOS token for training
-        if not rn_flag:
+        if self.tags.token_mode in ["unseg_and_scene_grasp", "unseg_grasp"]:
             mask[-1] = False
 
         seq_len = len(tokens)
