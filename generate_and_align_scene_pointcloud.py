@@ -24,7 +24,7 @@ import  blender.process_grasp as mygrasp
 
 try:
     from graspGPT.model.token_manager import get_token_manager, encode_sequence, decode_sequence
-    from graspGPT.model.parser_and_serializer import Serializer, Seq, Scene, SB, CB,GB, GRASP, AMODAL
+    from graspGPT.model.parser_and_serializer import Serializer, Seq, Scene, SB, CB,GB, GRASP, AMODAL, Parser, UNSEG
     from graspGPT.model.core import generate_seg_sequence
     from extract_sample_and_export import visualize_tokens 
 except ImportError:
@@ -663,6 +663,7 @@ def convert_PC_to_unseg_sequence(
     bbox_min: np.ndarray,
     bbox_max: np.ndarray,
     voxel_size: float,
+    seq_obj,
     volume_dims: Tuple[int, int, int] = (80, 54, 34)
 ):
     scene_pcd = scene_entry
@@ -688,15 +689,27 @@ def convert_PC_to_unseg_sequence(
 
     for coordinates in aligned_scene:
         x, y, z = (int(coordinates[0]), int(coordinates[1]), int(coordinates[2]))
-        if z <2:
-            continue
-        if y <4:
-            continue
+        #if z <2:
+        #    continue
+        #if y <4:
+        #    continue
         cbs.append(CB(coord=(x, y, z)))
 
     cbs.sort(key=lambda cb: cb.coord)
 
     new_scene = Scene(sbs=[SB(tag='unlabel', cbs=cbs)])
+
+
+    ast = Parser(seq_obj).parse()
+
+    old_scene = None
+    for i in ast.items:
+        if isinstance(i,Scene):
+            old_scene = i
+            break
+    assert old_scene is not None, "no scene detected"
+
+    new_unseg = UNSEG(sbs=old_scene.sbs)
 
 
     '''
@@ -716,7 +729,7 @@ def convert_PC_to_unseg_sequence(
     local_gbs = []
     for id in grasp_parampc.keys():
       
-        shape_tag = 'unlabel'  
+        shape_tag = f'object{id:02d}'  
 
         for parampc in grasp_parampc[id]:
             cbs = []
@@ -741,7 +754,7 @@ def convert_PC_to_unseg_sequence(
 
     grasp = GRASP(gbs=local_gbs)
 
-    seq = Seq(items=[new_scene, grasp])
+    seq = Seq(items=[new_scene, new_unseg, grasp])
     flat_tokens = Serializer.serialize(seq)
         
     return flat_tokens
@@ -897,6 +910,7 @@ def transform_and_save_pointcloud(
         bbox_min=bbox_min,
         bbox_max=bbox_max,
         voxel_size=voxel_size,
+        seq_obj = seq_obj,
     )
 
     #seq_unseg = generate_seg_sequence(seq_obj)
@@ -1431,7 +1445,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--outdir",
-        default="output/real_data/test_m15",
+        default="output/real_data/train_m15",
         help="Directory used for all stage 2 outputs",
     )
     parser.add_argument(
