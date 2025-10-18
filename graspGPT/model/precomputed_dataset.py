@@ -301,8 +301,13 @@ class PrecomputedDataset(Dataset):
             tokens = generate_amodal_sequence(tokens,self.volume_dims)
         '''
 
+        rn_flag= True
+        if self.tags.enable_grasp:
+            rn_flag = random.random() <0.5
+
         if num_others==0:
-            tokens = generate_seg_sequence(tokens,self.volume_dims, self.tags)
+            if rn_flag:
+                tokens = generate_seg_sequence(tokens,self.volume_dims, self.tags)
             
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
@@ -317,7 +322,8 @@ class PrecomputedDataset(Dataset):
         tokens = encode_sequence(tokens, self.token_mapping)
 
         #tokens = tokens[:-1]  # Remove the final EOS token for training
-        #mask[-1] = False
+        if not rn_flag:
+            mask[-1] = False
 
         seq_len = len(tokens)
 

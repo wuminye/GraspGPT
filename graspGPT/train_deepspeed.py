@@ -69,6 +69,7 @@ def get_default_config():
     C.model.tags.translation_argument = False # Whether to include translation argumentation
     C.model.tags.translate_scale = 5
     C.model.tags.add_unlabel_noise = False # Whether to randomly translate scenes
+    C.model.tags.enable_grasp = False
 
 
 
@@ -457,6 +458,8 @@ def main():
 
     parser.add_argument('--sort_unseg', action='store_true',
                        help='Enable sorting of unsegmented scenes (overrides config)')
+    parser.add_argument('--enable_grasp', action='store_true',
+                       help='Enable grasp prediction (overrides config)')
     parser.add_argument('--add_unlabel_noise', action='store_true',
                        help='Enable adding noise to unlabelled scenes (overrides config)')
     parser.add_argument('--translation_argument', action='store_true',
@@ -507,6 +510,8 @@ def main():
         config.model.tags.add_unlabel_noise = True
     if args.translation_argument:
         config.model.tags.translation_argument = True
+    if args.enable_grasp:
+        config.model.tags.enable_grasp = True
     if args.model_type:
         config.model.model_type = args.model_type
 
