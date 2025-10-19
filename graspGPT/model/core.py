@@ -761,8 +761,6 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     for sb in original_scene.sbs:
         for cb in sb.cbs:
             coord = cb.coord
-            if tags.add_unlabel_noise:
-                coord = maybe_modify_tuple_np(coord, max_values=volume_dims)
             serial = cb.serial
             if coord not in unique_serials:
                 unique_serials[coord] = serial
@@ -778,6 +776,14 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
         scene_coords_shell = extract_outer_shell_no_zopen(scene_coords)
     else:
         scene_coords_shell = scene_coords
+
+    if tags.add_unlabel_noise:
+        unique_serials = {}
+        for coord in scene_coords_shell:
+            coord = maybe_modify_tuple_np(coord, max_values=volume_dims)
+            if coord not in unique_serials:
+                    unique_serials[coord] = None
+        scene_coords_shell = [coord for coord in sorted(unique_serials.keys())]
 
     if tags.add_unlabel_cropping:
         merged_cbs = [CB(coord=tuple(coord), serial=None) for coord in sorted(scene_coords_shell) if random.random() >= 0.2]
