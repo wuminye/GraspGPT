@@ -69,9 +69,9 @@ def get_default_config():
     C.model.tags.translation_argument = False # Whether to include translation argumentation
     C.model.tags.translate_scale = 5
     C.model.tags.add_unlabel_noise = False # Whether to randomly translate scenes
-    #C.model.tags.enable_grasp = False  
     C.model.tags.add_unlabel_cropping = False
     C.model.tags.token_mode = "unseg_and_scene_grasp"
+    C.model.tags.enable_flood_fill = False
 
 
 
@@ -470,6 +470,8 @@ def main():
                         choices=['unseg_and_scene_grasp', 'unseg_only', 'unseg_grasp'],
                         default=None,
                         help='Select token handling mode for dataset augmentation')
+    parser.add_argument('--enable_flood_fill', action='store_true',
+                        help='Enable flood fill filtering when aggregating scenes')
     
     # Parse known args to handle DeepSpeed arguments
     args, unknown_args = parser.parse_known_args()
@@ -518,6 +520,8 @@ def main():
         config.model.tags.translation_argument = True
     if args.add_unlabel_cropping:
         config.model.tags.add_unlabel_cropping = True
+    if args.enable_flood_fill:
+        config.model.tags.enable_flood_fill = True
     if args.token_mode:
         config.model.tags.token_mode = args.token_mode
     if args.model_type:
