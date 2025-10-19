@@ -335,7 +335,9 @@ def process_dataset_sample(dataset_path: str, sample_idx: int, output_dir: str):
     tags.sort_unseg = True  # Whether to sort unsegmented scenes
     tags.translation_argument = True # Whether to include translation argumentation
     tags.translate_scale = 5
-    tags.add_unlabel_noise = True # Whether to randomly translate scenes
+    tags.add_unlabel_noise = False # Whether to randomly translate scenes
+    tags.add_unlabel_cropping = True
+    tags.token_mode = "unseg_only"  #['unseg_and_scene_grasp', 'unseg_only', 'unseg_grasp']
 
     
     

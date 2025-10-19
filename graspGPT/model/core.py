@@ -124,6 +124,88 @@ def save_voxels(sequence: list, file_path: str):
     return len(coords_with_colors)
 
 
+from collections import deque
+import numpy as np
+from typing import Iterable, Tuple, List, Optional
+
+def extract_outer_shell_no_zopen(
+    occupied_points: Iterable[Tuple[int, int, int]],
+    grid_shape: Tuple[int, int, int] = (80, 54, 34),
+    air_seed: Optional[Tuple[int, int, int]] = (0, 0, 33),
+    connectivity: int = 6,
+) -> np.ndarray:
+    """
+    使用 3D flood fill 提取体素占据体的最外层外表面点。
+    注意：z轴两端封闭（不从 z=0 或 z=Z-1 方向灌入空气）。
+    """
+    X, Y, Z = grid_shape
+    occ = np.zeros((X, Y, Z), dtype=bool)
+    for x, y, z in occupied_points:
+        if not (0 <= x < X and 0 <= y < Y and 0 <= z < Z):
+            raise ValueError(f"Occupied point {(x,y,z)} out of bounds for grid {grid_shape}.")
+        occ[x, y, z] = True
+
+    occ_pad = np.pad(occ, pad_width=((1,1),(1,1),(1,1)), mode='constant', constant_values=False)
+    visited = np.zeros_like(occ_pad, dtype=bool)
+
+    # 邻域定义
+    if connectivity == 6:
+        neigh = [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
+    elif connectivity == 26:
+        neigh = [(dx,dy,dz) for dx in (-1,0,1) for dy in (-1,0,1) for dz in (-1,0,1) if not (dx==dy==dz==0)]
+    else:
+        raise ValueError("connectivity must be 6 or 26")
+
+    q = deque()
+    PX, PY, PZ = occ_pad.shape
+
+    def enq_if_outside_air(ax:int, ay:int, az:int):
+        if 0 <= ax < PX and 0 <= ay < PY and 0 <= az < PZ and (not occ_pad[ax, ay, az]) and (not visited[ax, ay, az]):
+            visited[ax, ay, az] = True
+            q.append((ax, ay, az))
+
+    # Flood fill 起点：x/y 边界（不包括 z=0, z=Z-1）
+    for ax in [0, PX-1]:
+        for ay in range(PY):
+            for az in range(1, PZ-1):  # 跳过 z=0 和 z=Z-1
+                enq_if_outside_air(ax, ay, az)
+    for ay in [0, PY-1]:
+        for ax in range(PX):
+            for az in range(1, PZ-1):
+                enq_if_outside_air(ax, ay, az)
+
+    # 可选：已知空气种子（如 (0,0,33)）
+    if air_seed is not None:
+        sx, sy, sz = air_seed
+        if 0 <= sx < X and 0 <= sy < Y and 0 <= sz < Z and not occ[sx, sy, sz]:
+            enq_if_outside_air(sx+1, sy+1, sz+1)
+
+    # Flood fill BFS
+    while q:
+        ax, ay, az = q.popleft()
+        for dx, dy, dz in neigh:
+            enq_if_outside_air(ax+dx, ay+dy, az+dz)
+
+    # 去掉 padding
+    outside_air = visited[1:-1, 1:-1, 1:-1]
+
+    # 邻接判定：外部空气邻居
+    def shift_and_or(target: np.ndarray, src: np.ndarray, dx:int, dy:int, dz:int):
+        xs = slice(max(0, dx), X + min(0, dx))
+        ys = slice(max(0, dy), Y + min(0, dy))
+        zs = slice(max(0, dz), Z + min(0, dz))
+        xs2 = slice(max(0, -dx), X - max(0, dx))
+        ys2 = slice(max(0, -dy), Y - max(0, dy))
+        zs2 = slice(max(0, -dz), Z - max(0, dz))
+        target[xs, ys, zs] |= src[xs2, ys2, zs2]
+
+    nb_outside = np.zeros_like(occ, dtype=bool)
+    for dx, dy, dz in neigh:
+        shift_and_or(nb_outside, outside_air, dx, dy, dz)
+
+    shell = occ & nb_outside
+    shell_coords = np.argwhere(shell)
+    return shell_coords.tolist()
 
 
 
@@ -690,10 +772,14 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     if not unique_serials:
         raise ValueError("SCENE 段中没有可用的点云数据")
 
+    scene_coords = [coord for coord in sorted(unique_serials.keys())]
+
+    scene_coords_shell = extract_outer_shell_no_zopen(scene_coords)
+
     if tags.add_unlabel_cropping:
-        merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys()) if random.random() >= 0.2]
+        merged_cbs = [CB(coord=tuple(coord), serial=None) for coord in sorted(scene_coords_shell) if random.random() >= 0.2]
     else:
-        merged_cbs = [CB(coord=coord, serial=unique_serials[coord]) for coord in sorted(unique_serials.keys())]
+        merged_cbs = [CB(coord=tuple(coord), serial=None) for coord in sorted(scene_coords_shell)]
     
     new_scene = Scene(sbs=[SB(tag='unlabel', cbs=merged_cbs)])
 
