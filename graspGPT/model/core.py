@@ -660,35 +660,82 @@ def generate_amodal_sequence(
     return serialized
 
 
-def random_translation_argument(tokens, max_values,scale=5,del_z = 0):
+
+def crop_z_coords(tokens, max_values, del_z):
+    ast = Parser(tokens).parse()
+    new_items = []
+
+    for item in ast.items:
+        
+        if isinstance(item,Scene):
+            new_sbs = []
+            for sb in item.sbs:
+                new_cbs = []
+                for cb in sb.cbs:
+                    if cb.coord[2] < del_z:
+                        continue
+                    new_cbs.append(CB(coord=cb.coord, serial=None))
+                new_cbs.sort(key=lambda cb: cb.coord)
+                new_sbs.append(SB(tag=sb.tag, cbs=new_cbs))
+            new_items.append(Scene(sbs=new_sbs))
+
+        if isinstance(item,UNSEG):
+            new_items.append(item)
+            
+        if isinstance(item,GRASP):
+            new_items.append(item)
+
+    ast = Seq(items=new_items)
+    return Serializer.serialize(ast)
+
+def random_translation_argument(tokens, max_values,scale=5,real_data = False):
 
     translation = [random.randint(-scale, scale) for _ in range(3)]
+    #if real_data:
+    #    translation[-1] = -1
+    #else:
     translation[-1] = 0  # z 轴不变
+
+
+    def _translate_sbs(sbs: List[SB]) -> List[SB]:
+        new_sbs = []
+        for sb in sbs:
+            new_cbs = []
+            for cb in sb.cbs:
+                new_coord = []
+                flag=False
+                for c, max_v, delta in zip(cb.coord, max_values, translation):
+                    new_c = c + delta
+                    if new_c < 0:
+                        flag=True
+                        break
+                    if new_c >= max_v:
+                        flag=True
+                        break
+                    new_coord.append(new_c)
+                if flag:
+                    continue
+                new_cbs.append(CB(coord=tuple(new_coord), serial=None))
+
+            new_cbs.sort(key=lambda cb: cb.coord)
+            new_sbs.append(SB(tag=sb.tag, cbs=new_cbs))
+        return new_sbs
 
     ast = Parser(tokens).parse()
 
+
+
+
+    new_items = []
+
     for item in ast.items:
     
-        if isinstance(item,Scene) or isinstance(item,UNSEG):
-            for sb in item.sbs:
-                for cb in sb.cbs:
-                    new_coord = []
-                    flag=False
-                    for c, max_v, delta in zip(cb.coord, max_values, translation):
-                        new_c = c + delta
-                        if new_c < 0:
-                            flag=True
-                            break
-                        if new_c >= max_v:
-                            flag=True
-                            break
-                        new_coord.append(new_c)
-                    if flag:
-                        continue
-                    if new_coord[-1]<del_z and isinstance(item,Scene):
-                        continue
-                    cb.coord = tuple(new_coord)
-                sb.cbs.sort(key=lambda cb: cb.coord)
+        if isinstance(item,Scene):
+            new_items.append(Scene(sbs=_translate_sbs(item.sbs)))
+
+        if isinstance(item,UNSEG):
+            new_items.append(UNSEG(sbs=_translate_sbs(item.sbs)))
+            
         if isinstance(item,GRASP):
             for gb in item.gbs:
                 for cb in gb.cbs:
@@ -706,6 +753,8 @@ def random_translation_argument(tokens, max_values,scale=5,del_z = 0):
                     if flag:
                         continue
                     cb.coord = tuple(new_coord)
+            new_items.append(item)
+    ast = Seq(items=new_items)
     return Serializer.serialize(ast)
 
 

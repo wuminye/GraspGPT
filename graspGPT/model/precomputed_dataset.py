@@ -14,11 +14,11 @@ import random
 try:
     from .token_manager import get_token_manager, decode_sequence, encode_sequence
     from .parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
-    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument
+    from .core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument, crop_z_coords
 except ImportError:
     from token_manager import get_token_manager, decode_sequence, encode_sequence
     from parser_and_serializer import Serializer, Seq, Scene, SB, CB, GRASP, GB, Parser, parse_with_cpp, AMODAL, UNSEG, MaskSerializer
-    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument
+    from core import generate_amodal_sequence, generate_seg_sequence, maybe_drop_amodal_or_unseg, random_translation_argument, crop_z_coords
 
 
 
@@ -290,10 +290,14 @@ class PrecomputedDataset(Dataset):
         tokens = decode_sequence(tokens, self.token_mapping)
 
 
+        ast = Parser(tokens).parse()
+        real_data = True if len(ast.items)>2 else False
+
+
 
 
         if self.tags.translation_argument:
-            tokens = random_translation_argument(tokens, self.volume_dims,scale=self.tags.translate_scale,del_z=self.tags.del_z)
+            tokens = random_translation_argument(tokens, self.volume_dims,scale=self.tags.translate_scale, real_data = real_data)
 
 
     
@@ -320,6 +324,31 @@ class PrecomputedDataset(Dataset):
         if num_others==0:
             if rn_flag:
                 tokens = generate_seg_sequence(tokens,self.volume_dims, self.tags)
+                if self.tags.del_z>0:
+                    tokens = crop_z_coords(tokens, self.volume_dims, self.tags.del_z)
+        else: # process real data
+            if self.tags.token_mode == "unseg_grasp":
+                ast = Parser(tokens).parse()
+                new_items = [item for item in ast.items if  isinstance(item, Scene) or isinstance(item, GRASP)]
+                for gb in new_items[1].gbs:
+                    gb.tag = 'unlabel'
+                ast = Seq(items=new_items)
+                tokens = Serializer.serialize(ast)
+            else:
+                if rn_flag:
+                    ast = Parser(tokens).parse()
+                    new_items = [item for item in ast.items if  isinstance(item, Scene) or isinstance(item, UNSEG)]
+                    ast = Seq(items=new_items)
+                    tokens = Serializer.serialize(ast)
+                else:
+                    ast = Parser(tokens).parse()
+                    new_items = [item for item in ast.items if  isinstance(item, UNSEG) or isinstance(item, GRASP)]
+                    new_items[0] = Scene(sbs=new_items[0].sbs)
+                    ast = Seq(items=new_items)
+                    tokens = Serializer.serialize(ast)
+            
+                
+                
 
         #    tokens = generate_amodal_sequence(tokens,self.volume_dims)
 
