@@ -691,10 +691,10 @@ def crop_z_coords(tokens, max_values, del_z):
 def random_translation_argument(tokens, max_values,scale=5,real_data = False):
 
     translation = [random.randint(-scale, scale) for _ in range(3)]
-    #if real_data:
-    #    translation[-1] = -1
-    #else:
-    translation[-1] = 0  # z 轴不变
+    if real_data:
+        translation[-1] = -1
+    else:
+        translation[-1] = 0  # z 轴不变
 
 
     def _translate_sbs(sbs: List[SB]) -> List[SB]:
