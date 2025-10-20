@@ -334,12 +334,16 @@ class PrecomputedDataset(Dataset):
                     gb.tag = 'unlabel'
                 ast = Seq(items=new_items)
                 tokens = Serializer.serialize(ast)
+                if self.tags.del_z>0:
+                    tokens = crop_z_coords(tokens, self.volume_dims, self.tags.del_z)
             else:
                 if rn_flag:
                     ast = Parser(tokens).parse()
                     new_items = [item for item in ast.items if  isinstance(item, Scene) or isinstance(item, UNSEG)]
                     ast = Seq(items=new_items)
                     tokens = Serializer.serialize(ast)
+                    if self.tags.del_z>0:
+                        tokens = crop_z_coords(tokens, self.volume_dims, self.tags.del_z)
                 else:
                     ast = Parser(tokens).parse()
                     new_items = [item for item in ast.items if  isinstance(item, UNSEG) or isinstance(item, GRASP)]

@@ -40,7 +40,7 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --translation_argument \
     --add_unlabel_cropping \
     --enable_flood_fill \
-    --del_z 0 \
+    --del_z 1 \
     --token_mode unseg_and_scene_grasp \
     --resume ../output/exp40/iter_234000 \
     --data_path ../output/precomputed_data_comb/
