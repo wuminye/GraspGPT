@@ -293,7 +293,7 @@ class PrecomputedDataset(Dataset):
 
 
         if self.tags.translation_argument:
-            tokens = random_translation_argument(tokens, self.volume_dims,scale=self.tags.translate_scale)
+            tokens = random_translation_argument(tokens, self.volume_dims,scale=self.tags.translate_scale,del_z=self.tags.del_z)
 
 
     

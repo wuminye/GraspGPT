@@ -73,6 +73,8 @@ def get_default_config():
     C.model.tags.token_mode = "unseg_and_scene_grasp"
     C.model.tags.enable_flood_fill = False
 
+    C.model.tags.del_z = 0   # only effect when translation_argument is enabled
+
 
 
     # Training configuration  
@@ -472,6 +474,8 @@ def main():
                         help='Select token handling mode for dataset augmentation')
     parser.add_argument('--enable_flood_fill', action='store_true',
                         help='Enable flood fill filtering when aggregating scenes')
+    parser.add_argument('--del_z', type=int, default=0,
+                       help='remove coords')
     
     # Parse known args to handle DeepSpeed arguments
     args, unknown_args = parser.parse_known_args()
@@ -526,6 +530,8 @@ def main():
         config.model.tags.token_mode = args.token_mode
     if args.model_type:
         config.model.model_type = args.model_type
+    if args.del_z >0:
+        config.model.tags.del_z = args.del_z
 
     config.deepspeed.local_rank = args.local_rank
     

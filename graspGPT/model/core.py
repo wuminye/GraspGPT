@@ -660,7 +660,7 @@ def generate_amodal_sequence(
     return serialized
 
 
-def random_translation_argument(tokens, max_values,scale=5):
+def random_translation_argument(tokens, max_values,scale=5,del_z = 0):
 
     translation = [random.randint(-scale, scale) for _ in range(3)]
     translation[-1] = 0  # z 轴不变
@@ -684,6 +684,8 @@ def random_translation_argument(tokens, max_values,scale=5):
                             break
                         new_coord.append(new_c)
                     if flag:
+                        continue
+                    if new_coord[-1]<del_z and isinstance(item,Scene):
                         continue
                     cb.coord = tuple(new_coord)
                 sb.cbs.sort(key=lambda cb: cb.coord)
