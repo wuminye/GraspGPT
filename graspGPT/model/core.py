@@ -739,14 +739,17 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
 
         if isinstance(item,UNSEG):
             if valid:
+                new_sbs, valid = _translate_sbs(item.sbs)
                 new_items.append(UNSEG(sbs=new_sbs))
             else:
                 new_items.append(item)
 
         if isinstance(item,GRASP):
+            new_gbs = []
             for gb in item.gbs:
-                new_gb = []
+               
                 gb_flag = False
+                
                 for cb in gb.cbs:
                     new_coord = []
                     flag=False
@@ -765,8 +768,9 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
                     cb.coord = tuple(new_coord)
                 if gb_flag:
                     continue
-                new_gb.append(GB(tag=gb.tag, cbs=gb.cbs))
-            new_items.append(GRASP(gbs=new_gb))
+                new_gbs.append(GB(tag=gb.tag, cbs=gb.cbs))
+            
+            new_items.append(GRASP(gbs=new_gbs))
     ast = Seq(items=new_items)
     return Serializer.serialize(ast)
 
