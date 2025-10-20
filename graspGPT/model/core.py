@@ -718,9 +718,12 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
                 new_cbs.append(CB(coord=tuple(new_coord), serial=None))
 
             new_cbs.sort(key=lambda cb: cb.coord)
-            new_sbs.append(SB(tag=sb.tag, cbs=new_cbs))
-        return new_sbs
-
+            if len(new_cbs) > 0 :
+                new_sbs.append(SB(tag=sb.tag, cbs=new_cbs))
+        if len(new_sbs) ==0:
+            return sbs,False
+        return new_sbs,True
+ 
     ast = Parser(tokens).parse()
 
 
@@ -731,13 +734,19 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
     for item in ast.items:
     
         if isinstance(item,Scene):
-            new_items.append(Scene(sbs=_translate_sbs(item.sbs)))
+            new_sbs, valid = _translate_sbs(item.sbs)
+            new_items.append(Scene(sbs=new_sbs))
 
         if isinstance(item,UNSEG):
-            new_items.append(UNSEG(sbs=_translate_sbs(item.sbs)))
-            
+            if valid:
+                new_items.append(UNSEG(sbs=new_sbs))
+            else:
+                new_items.append(item)
+
         if isinstance(item,GRASP):
             for gb in item.gbs:
+                new_gb = []
+                gb_flag = False
                 for cb in gb.cbs:
                     new_coord = []
                     flag=False
@@ -751,9 +760,13 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
                             break
                         new_coord.append(new_c)
                     if flag:
-                        continue
+                        gb_flag = True
+                        break
                     cb.coord = tuple(new_coord)
-            new_items.append(item)
+                if gb_flag:
+                    continue
+                new_gb.append(GB(tag=gb.tag, cbs=gb.cbs))
+            new_items.append(GRASP(gbs=new_gb))
     ast = Seq(items=new_items)
     return Serializer.serialize(ast)
 
@@ -814,8 +827,6 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
             coord = cb.coord
             serial = cb.serial
             if coord not in unique_serials:
-                unique_serials[coord] = serial
-            elif unique_serials[coord] is None and serial is not None:
                 unique_serials[coord] = serial
 
     if not unique_serials:

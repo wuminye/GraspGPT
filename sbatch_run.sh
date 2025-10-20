@@ -35,14 +35,14 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --max_iters 350000 \
     --wandb_project "graspgpt-deepspeed" \
     --sort_unseg \
-    --output_dir ../output/exp39 \
+    --output_dir ../output/exp40 \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
     --add_unlabel_cropping \
     --enable_flood_fill \
     --del_z 1 \
+    --token_mode unseg_and_scene_grasp \
     --resume ../output/exp37/iter_210000 \
-    --token_mode unseg_and_scene_grasp
     #--model_type gpt2-shallow-wide
     #--resume ../output/exp22/iter_15000 \
     #--translation_argument \
