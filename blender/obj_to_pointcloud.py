@@ -15,6 +15,7 @@ from multiprocessing import Pool, cpu_count
 import trimesh
 import xml.etree.ElementTree as ET
 import argparse
+import time
 
 def parse_mtl_file(mtl_path: str) -> Dict[str, np.ndarray]:
     """Parse MTL file and extract material colors (Kd - diffuse color)"""
@@ -157,7 +158,11 @@ def filter_points_by_bbox(pcd: o3d.geometry.PointCloud, bbox_min: np.ndarray, bb
     
     if np.sum(mask) / len(mask) < 0.05:
         print("Warning: 95% or more points are outside the bounding box")
-        exit(1)
+        mask[:] = False
+    
+    if np.sum(mask) / len(mask) < 0.70:
+        print("Warning: 30% or more points are outside the bounding box", np.sum(mask) / len(mask))
+        mask[:] = False  # Disable filtering in this case
     
     # Filter points
     filtered_points = points[mask]
@@ -404,10 +409,14 @@ def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox
         
         # Check if points are within bbox before voxelization
         points = np.asarray(pcd.points)
-        all_within_bbox = check_points_in_bbox(points, bbox_min, bbox_max, obj_path.name)
+        #all_within_bbox = check_points_in_bbox(points, bbox_min, bbox_max, obj_path.name)
         
-        if not all_within_bbox:
-            pcd = filter_points_by_bbox(pcd, bbox_min, bbox_max)
+        #if not all_within_bbox:
+        pcd = filter_points_by_bbox(pcd, bbox_min, bbox_max)
+
+        if len(pcd.points) == 0:
+            print(f"Warning: No voxel data generated for {obj_path.name}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            return None
         
         # Apply voxel downsampling with bbox
         downsampled_pcd, voxel_coordinates = voxel_downsample_with_colors(pcd, voxel_size, bbox_min, bbox_max)
@@ -419,8 +428,7 @@ def process_obj_scene(obj_path: str, output_dir: str, bbox_min: np.ndarray, bbox
         # Create data list from voxel data
         colors = np.asarray(downsampled_pcd.colors) if len(downsampled_pcd.colors) > 0 else np.full((len(voxel_coordinates), 3), 0.5)
         data_list = create_voxel_data_list(voxel_coordinates, colors)
-        if len(data_list) == 0:
-            print(f"Warning: No voxel data generated for {obj_path.name}!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+       
         print(f"Created data list with {len(data_list)} color groups {obj_path.name}")
         return data_list
             
@@ -433,7 +441,7 @@ def main():
     parser = argparse.ArgumentParser(description="Convert OBJ files to colored point clouds")
     parser.add_argument("--input_dir", default="../output/synthetic_meshes", help="Directory containing OBJ files to process")
     parser.add_argument("--output_dir", default="../output/pointclouds", help="Output directory for point clouds")
-    parser.add_argument("--voxel_size", type=float, default=0.01, help="Voxel size for downsampling")
+    parser.add_argument("--voxel_size", type=float, default=0.0075, help="Voxel size for downsampling")
     parser.add_argument("--sample_points", type=int, default=100000, help="Number of points to sample from each mesh")
     parser.add_argument("--skips", type=int, default=0)
     parser.add_argument("--no_multiprocessing", action="store_true", help="Disable multiprocessing")
@@ -495,22 +503,58 @@ def main():
             num_processes = min(cpu_count(), len(current_batch_args))
             print(f"Using {num_processes} processes for parallel processing")
             
-            with Pool(processes=num_processes) as pool:
-                try:
-                    results = pool.map_async(process_single_obj, current_batch_args).get(timeout=80)
-                except TimeoutError:
-                    print(f"Processing batch timed out after 80 seconds, terminating processes...")
-                    pool.terminate()
-                    pool.join()
-                    results = []
+            timeout_seconds = 80
+            results = []
+            timed_out_objects: List[str] = []
+            pool = Pool(processes=num_processes)
+            try:
+                pending = {}
+                for job_args in current_batch_args:
+                    obj_path = job_args[0]
+                    pending[obj_path] = (pool.apply_async(process_single_obj, (job_args,)), time.time())
                 
-                for obj_path, data_list in results:
-                    if data_list is not None:
-                        current_batch_data.append(data_list)
-                        successful_files.append(obj_path)
-                        success_count += 1
-                    else:
-                        print(f"Failed to process: {obj_path}")
+                while pending:
+                    progress_made = False
+                    current_time = time.time()
+                    for obj_path, (async_result, start_time) in list(pending.items()):
+                        if async_result.ready():
+                            try:
+                                results.append(async_result.get())
+                            except Exception:
+                                pending.pop(obj_path, None)
+                                pool.terminate()
+                                raise
+                            else:
+                                pending.pop(obj_path, None)
+                                progress_made = True
+                        elif current_time - start_time > timeout_seconds:
+                            timed_out_objects.append(obj_path)
+                            pending.pop(obj_path, None)
+                            progress_made = True
+                    if pending and not progress_made:
+                        time.sleep(0.5)
+                
+                if timed_out_objects:
+                    print(f"Processing batch {batch_count} terminated timed out tasks (>{timeout_seconds}s):")
+                    for obj_path in timed_out_objects:
+                        print(f" - Timed out: {obj_path}")
+                    pool.terminate()
+                else:
+                    pool.close()
+            finally:
+                pool.join()
+            
+            for obj_path, data_list in results:
+                if data_list is not None:
+                    current_batch_data.append(data_list)
+                    successful_files.append(obj_path)
+                    success_count += 1
+                else:
+                    print(f"Failed to process: {obj_path}")
+            
+            if timed_out_objects:
+                for obj_path in timed_out_objects:
+                    print(f"Failed to process due to timeout: {obj_path}")
         else:
             # Single-threaded processing for current batch
             print("Using single-threaded processing")

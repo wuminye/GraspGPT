@@ -609,7 +609,7 @@ class VoxelDataset(Dataset):
             # Process grasp data to get grasp group
             try:
                 grasp_group = process_grasp_data({obj_id: grasp_data}, obj_id, 
-                                               fric_coef_thresh=0.4, grasp_height=0.02)
+                                               fric_coef_thresh=0.3, grasp_height=0.02)
 
                 
                 sample_group = grasp_group.random_sample(numGrasp = 2500)
