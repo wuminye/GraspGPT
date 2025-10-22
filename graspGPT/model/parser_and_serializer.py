@@ -84,7 +84,7 @@ Coord = Tuple[int, int, int]
 Serial = str  # strings like '<serial3>', '<serial5>', '<serial9>' - dynamic format: '<serial' INT '>'
 Token = Union[str, Coord]
 
-TokenMask = bool
+TokenMask = int
 
 
 # Token定义已移至TokenManager中统一管理
@@ -575,23 +575,23 @@ class MaskSerializer:
                 tokens.extend(MaskSerializer._serialize_grasp(item))
 
         # Add the final 'end' token
-        tokens.append(True)
+        tokens.append(1)
         return tokens
     
     @staticmethod
     def _serialize_sb(sb: SB) -> List[TokenMask]:
         """Serialize an SB node to tokens."""
-        tokens: List[TokenMask] = [True]  # Start with the tag ('circle' or 'square')
+        tokens: List[TokenMask] = [2]  
         
         # Add all CB tokens
-        for cb in sb.cbs:
-            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'unlabel')))
+        for i, cb in enumerate(sb.cbs):
+            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'unlabel'), important=(i < 10)))
         
         return tokens
 
     @staticmethod
     def _serialize_scene(scene: Scene) -> List[TokenMask]:
-        tokens: List[TokenMask] = [True]
+        tokens: List[TokenMask] = [1]
         for sb in scene.sbs:
             tokens.extend(MaskSerializer._serialize_sb(sb))
         return tokens
@@ -599,26 +599,26 @@ class MaskSerializer:
     @staticmethod
     def _serialize_unseg(unseg: UNSEG) -> List[TokenMask]:
         """Serialize an UNSEG node to tokens."""
-        tokens: List[TokenMask] = [True]
+        tokens: List[TokenMask] = [1]
 
         # Add all SB tokens inside UNSEG (must all use objectXX tags)
         for sb in unseg.sbs:
             tokens.extend(MaskSerializer._serialize_sb(sb))
 
-        tokens.append(True)
+        tokens.append(2)
         return tokens
 
     @staticmethod
     def _serialize_amodal(amodal: AMODAL) -> List[TokenMask]:
-        tokens: List[TokenMask] = [True]
+        tokens: List[TokenMask] = [1]
         tokens.extend(MaskSerializer._serialize_sb(amodal.sb))
-        tokens.append(True)
+        tokens.append(1)
         return tokens
     
     @staticmethod
     def _serialize_grasp(grasp: GRASP) -> List[TokenMask]:
         """Serialize a GRASP node to tokens."""
-        tokens: List[TokenMask] = [True]
+        tokens: List[TokenMask] = [1]
         
         # Add all GB tokens
         for gb in grasp.gbs:
@@ -629,7 +629,7 @@ class MaskSerializer:
     @staticmethod
     def _serialize_gb(gb: GB) -> List[TokenMask]:
         """Serialize a GB node to tokens."""
-        tokens: List[TokenMask] = [True, True]
+        tokens: List[TokenMask] = [1, 1]
         
         # Add all CB tokens
         for cb in gb.cbs:
@@ -638,16 +638,16 @@ class MaskSerializer:
         return tokens
     
     @staticmethod
-    def _serialize_cb(cb: CB, maskout: bool = False) -> List[TokenMask]:
+    def _serialize_cb(cb: CB, maskout: bool = False, important: bool = False) -> List[TokenMask]:
         """Serialize a CB node to tokens."""
         if maskout:
-            tokens: List[TokenMask] = [False]
+            tokens: List[TokenMask] = [0]
         else:
-            tokens: List[TokenMask] = [True]  # Start with the coordinate
+            tokens: List[TokenMask] = [1 if not important else 2]  # Start with the coordinate
 
         # Add serial if present
         if cb.serial is not None:
-            tokens.append(True if not maskout else False)
+            tokens.append(1 if not maskout else 0)
         
         return tokens
 

@@ -79,8 +79,8 @@ def pad_collate(batch):
     x_batch = chunks[:, :-1, ...]  # Input tokens
     y_batch = chunks[:, 1:, ...]   # Target tokens (next token prediction)
     loss_mask_batch = loss_masks[:, 1:]
-    non_padding = (y_batch[..., 0] != -1)
-    loss_mask_batch = loss_mask_batch & non_padding
+    #non_padding = (y_batch[..., 0] != -1)
+    #loss_mask_batch = loss_mask_batch & non_padding
 
     x_batch[x_batch<0]=0
 

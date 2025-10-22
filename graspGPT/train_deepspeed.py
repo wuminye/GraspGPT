@@ -416,15 +416,18 @@ def training_step(model_engine, batch, config):
         loss_mask = loss_mask.to(model_engine.local_rank, non_blocking=True)
 
     # Forward pass
-    logits, loss = model_engine(x, targets=y, attention_mask=None, loss_mask=loss_mask)
+    logits, loss, structure_loss = model_engine(x, targets=y, attention_mask=None, loss_mask=loss_mask)
+
+
+    total_loss = loss + 5*structure_loss
     
     # Backward pass
-    model_engine.backward(loss)
+    model_engine.backward(total_loss)
     
     # Optimizer step
     model_engine.step()
-    
-    return loss
+
+    return loss, structure_loss
 
 
 def main():
@@ -620,15 +623,17 @@ def main():
             
             # Training step
             iter_start_time = time.time()
-            loss = training_step(model_engine, batch, config)
+            loss, structure_loss = training_step(model_engine, batch, config)
             iter_time = time.time() - iter_start_time
             
             # Update progress bar (only on rank 0)
             if rank == 0:
                 lr = model_engine.get_lr()[0]
                 loss_value = loss.item()
+                structure_loss_value = structure_loss.item()
                 progress_bar.set_postfix({
                     'Loss': f'{loss_value:.4f}',
+                    'Structure Loss': f'{structure_loss_value:.4f}',
                     'LR': f'{lr:.2e}',
                     'Time/iter': f'{iter_time*1000:.1f}ms'
                 })
@@ -638,8 +643,10 @@ def main():
             if iter_num % config.system.log_every == 0:
                 lr = model_engine.get_lr()[0]
                 loss_value = loss.item()
+                structure_loss_value = structure_loss.item()
                 message = (f"Iter {iter_num:6d} | "
                           f"Loss: {loss_value:.4f} | "
+                          f"Structure Loss: {structure_loss_value:.4f} | "
                           f"LR: {lr:.2e} | "
                           f"Time: {iter_time*1000:.1f}ms")
                 log_message(message, log_file)
@@ -648,6 +655,7 @@ def main():
                 if config.wandb.enabled and wandb.run is not None and rank == 0:
                     wandb.log({
                         'train/loss': loss_value,
+                        'train/structure_loss': structure_loss_value,
                         'train/learning_rate': lr,
                         'train/iter_time_ms': iter_time * 1000,
                         'iteration': iter_num

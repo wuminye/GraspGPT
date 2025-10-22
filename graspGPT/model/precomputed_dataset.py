@@ -361,14 +361,14 @@ class PrecomputedDataset(Dataset):
 
         ast = Parser(tokens).parse()
         mask = MaskSerializer.serialize(ast)
-        mask = torch.tensor(mask, dtype=torch.bool)
+        mask = torch.tensor(mask, dtype=torch.int)
         
 
         tokens = encode_sequence(tokens, self.token_mapping)
 
         #tokens = tokens[:-1]  # Remove the final EOS token for training
         if self.tags.token_mode in ["unseg_and_scene_grasp", "unseg_grasp"]:
-            mask[-1] = False
+            mask[-1] = 0
 
         seq_len = len(tokens)
 

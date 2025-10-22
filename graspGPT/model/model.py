@@ -640,16 +640,24 @@ class graspGPT(nn.Module):
 
         if loss_mask is not None:
             mask = loss_mask.reshape(-1).to(logits.device)
-            assert mask.dtype == torch.bool, f"loss_mask should be bool tensor, {mask.dtype}"
-            valid = mask & (target_tokens != -1)
-            if valid.any():
-                return F.cross_entropy(logits_flat[valid], target_tokens[valid])
+            assert mask.dtype == torch.int, f"loss_mask should be int tensor, {mask.dtype}"
+
+            content_mask = (mask == 1) & (target_tokens != -1)
+            structure_mask = (mask == 2) & (target_tokens != -1)
+            #valid = mask & (target_tokens != -1)
+            content_loss = 0.0
+            structure_loss = 0.0
+            if content_mask.any():
+                content_loss = F.cross_entropy(logits_flat[content_mask], target_tokens[content_mask])
+            if structure_mask.any():
+                structure_loss = F.cross_entropy(logits_flat[structure_mask], target_tokens[structure_mask])
+            return content_loss, structure_loss
 
         non_padding = target_tokens != -1
         if non_padding.any():
-            return F.cross_entropy(logits_flat[non_padding], target_tokens[non_padding])
+            return F.cross_entropy(logits_flat[non_padding], target_tokens[non_padding]), 0.0
 
-        return logits_flat.sum() * 0.0
+        return logits_flat.sum() * 0.0, 0.0
 
     def forward(self, idx, targets=None, attention_mask=None, loss_mask=None):
         """
@@ -703,9 +711,9 @@ class graspGPT(nn.Module):
         logits_heads = [logits]
         loss = None
         if targets is not None:
-            loss = self._compute_loss(logits, targets, loss_mask=loss_mask)
+            loss, structure_loss = self._compute_loss(logits, targets, loss_mask=loss_mask)
 
-        return logits_heads, loss
+        return logits_heads, loss, structure_loss
 
     @torch.no_grad()
     def generate(
