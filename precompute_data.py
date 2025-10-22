@@ -120,7 +120,7 @@ def main():
     total_saved = 0
     
     # 创建保存目录
-    output_dir = Path("output/precomputed_data")
+    output_dir = Path("output/precomputed_data_large")
     output_dir.mkdir(exist_ok=True)
     
     # 生成随机数用于文件名
