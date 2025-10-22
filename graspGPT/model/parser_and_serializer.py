@@ -579,13 +579,13 @@ class MaskSerializer:
         return tokens
     
     @staticmethod
-    def _serialize_sb(sb: SB) -> List[TokenMask]:
+    def _serialize_sb(sb: SB, is_unseg: bool = False) -> List[TokenMask]:
         """Serialize an SB node to tokens."""
-        tokens: List[TokenMask] = [2]  
+        tokens: List[TokenMask] = [2 if is_unseg else 1]  # Start with the tag mask
         
         # Add all CB tokens
         for i, cb in enumerate(sb.cbs):
-            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'unlabel'), important=(i < 10)))
+            tokens.extend(MaskSerializer._serialize_cb(cb, maskout=(sb.tag == 'unlabel'), important=(i < 10 and is_unseg)))
         
         return tokens
 
@@ -603,7 +603,7 @@ class MaskSerializer:
 
         # Add all SB tokens inside UNSEG (must all use objectXX tags)
         for sb in unseg.sbs:
-            tokens.extend(MaskSerializer._serialize_sb(sb))
+            tokens.extend(MaskSerializer._serialize_sb(sb, is_unseg=True))
 
         tokens.append(2)
         return tokens

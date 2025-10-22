@@ -410,10 +410,10 @@ def training_step(model_engine, batch, config):
     #loss_mask = None # Not used currently !!!!!!!!!!!!!!!!!!!
 
     # Move to device (DeepSpeed handles this automatically)
-    x = x.to(model_engine.local_rank, non_blocking=True)
-    y = y.to(model_engine.local_rank, non_blocking=True)
+    x = x.to(model_engine.local_rank, non_blocking=True).contiguous()
+    y = y.to(model_engine.local_rank, non_blocking=True).contiguous()
     if loss_mask is not None:
-        loss_mask = loss_mask.to(model_engine.local_rank, non_blocking=True)
+        loss_mask = loss_mask.to(model_engine.local_rank, non_blocking=True).contiguous()
 
     # Forward pass
     logits, loss, structure_loss = model_engine(x, targets=y, attention_mask=None, loss_mask=loss_mask)
