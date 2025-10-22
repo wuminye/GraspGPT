@@ -655,9 +655,9 @@ class graspGPT(nn.Module):
 
         non_padding = target_tokens != -1
         if non_padding.any():
-            return F.cross_entropy(logits_flat[non_padding], target_tokens[non_padding]), 0.0
+            return F.cross_entropy(logits_flat[non_padding], target_tokens[non_padding]), logits_flat.sum() * 0.0
 
-        return logits_flat.sum() * 0.0, 0.0
+        return logits_flat.sum() * 0.0, logits_flat.sum() * 0.0
 
     def forward(self, idx, targets=None, attention_mask=None, loss_mask=None):
         """
