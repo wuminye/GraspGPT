@@ -433,7 +433,7 @@ def main():
     parser = argparse.ArgumentParser(description="Convert OBJ files to colored point clouds")
     parser.add_argument("--input_dir", default="../output/synthetic_meshes", help="Directory containing OBJ files to process")
     parser.add_argument("--output_dir", default="../output/pointclouds", help="Output directory for point clouds")
-    parser.add_argument("--voxel_size", type=float, default=0.01, help="Voxel size for downsampling")
+    parser.add_argument("--voxel_size", type=float, default=0.0075, help="Voxel size for downsampling")
     parser.add_argument("--sample_points", type=int, default=100000, help="Number of points to sample from each mesh")
     parser.add_argument("--skips", type=int, default=0)
     parser.add_argument("--no_multiprocessing", action="store_true", help="Disable multiprocessing")

@@ -1,15 +1,15 @@
 #!/bin/bash
 
 
-#SBATCH --job-name=exp38             # Descriptive job name
+#SBATCH --job-name=exp46            # Descriptive job name
 #SBATCH --time=18:30:00                       # Maximum wall time (hh:mm:ss)
 #SBATCH --nodes=1                             # Number of nodes to use
 #SBATCH --ntasks-per-node=4                   # Number of MPI tasks per node (e.g., 1 per GPU)
 #SBATCH --cpus-per-task=5                    # Number of CPU cores per task (adjust as needed)
 #SBATCH --gres=gpu:4                          # Number of GPUs per node (adjust to match hardware)
 #SBATCH --partition=boost_usr_prod           # GPU-enabled partition
-#SBATCH --output=logs/exp38.out              # File for standard output
-#SBATCH --error=logs/exp38.err               # File for standard error
+#SBATCH --output=logs/exp46.out              # File for standard output
+#SBATCH --error=logs/exp46.err               # File for standard error
 #SBATCH --account=EUHPC_D22_064          # Project account number
 
 # Load necessary modules (adjust to your environment)
@@ -29,21 +29,22 @@ echo "Starting DeepSpeed training with 4 GPUs..."
 # batch_size will be automatically calculated based on micro_batch_size and world_size
 deepspeed --num_gpus=4 train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
-    --batch_size 16 \
+    -batch_size 16 \
     --micro_batch_size 2 \
     --learning_rate 2e-4 \
     --max_iters 350000 \
     --wandb_project "graspgpt-deepspeed" \
     --sort_unseg \
-    --output_dir ../output/exp41 \
+    --output_dir ../output/exp47 \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
     --add_unlabel_cropping \
     --enable_flood_fill \
-    --del_z 1 \
-    --token_mode unseg_and_scene_grasp \
-    --resume ../output/exp40/iter_234000 \
-    --data_path ../output/precomputed_data_comb/
+    --del_z 0 \
+    --token_mode unseg_only \
+    --data_path ../output/precomputed_data_comb_all \
+    #--resume ../output/exp45/iter_213000 \
+    #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide
     #--resume ../output/exp22/iter_15000 \
     #--translation_argument \

@@ -377,6 +377,7 @@ class PrecomputedDataset(Dataset):
         if seq_len > self.max_sequence_length:
             # Truncate if too long
             tokens = tokens[:self.max_sequence_length]
+            mask = mask[:self.max_sequence_length]
             seq_len = self.max_sequence_length
 
         tokens = tokens.unsqueeze(-1)       
