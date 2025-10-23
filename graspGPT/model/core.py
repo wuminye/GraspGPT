@@ -806,6 +806,25 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.3, p_up=0.3, p_down=0.3):
 
     return tuple(new_t)
 
+def random_remove_sbs(scene: Scene, remove_num_range = 3, p_remove=0.7) -> Scene:
+    """随机删除 Scene 中的 SBs。"""
+
+    if random.random() >= p_remove:
+        return scene  # 不进行删除，返回原始 Scene
+
+    remove_num = random.randint(1, remove_num_range)
+
+    if len(scene.sbs) <= remove_num:
+        return scene  # 无法删除，返回原始 Scene
+
+
+    random.shuffle(scene.sbs)
+
+
+    new_sbs = scene.sbs[remove_num:]
+
+    return Scene(sbs=new_sbs)
+
 def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]], volume_dims: Tuple[int, int, int], tags) -> List[Union[str, Tuple[int, int, int]]]:
     """将 SCENE 聚合为单个 'unlabel' 点云，并把原始数据迁移到 UNSEG。"""
 
@@ -813,6 +832,9 @@ def generate_seg_sequence( token_sequence: List[Union[str, Tuple[int, int, int]]
     original_seq = parser.parse()
 
     original_scene = next((item for item in original_seq.items if isinstance(item, Scene)), None)
+
+    if tags.random_remove_sbs:
+        original_scene = random_remove_sbs(original_scene)
 
 
 
