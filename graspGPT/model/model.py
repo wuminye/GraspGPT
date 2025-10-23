@@ -645,8 +645,8 @@ class graspGPT(nn.Module):
             content_mask = (mask == 1) & (target_tokens != -1)
             structure_mask = (mask == 2) & (target_tokens != -1)
             #valid = mask & (target_tokens != -1)
-            content_loss = 0.0
-            structure_loss = 0.0
+            content_loss = logits_flat.sum() * 0.0
+            structure_loss = logits_flat.sum() * 0.0
             if content_mask.any():
                 content_loss = F.cross_entropy(logits_flat[content_mask], target_tokens[content_mask])
             if structure_mask.any():

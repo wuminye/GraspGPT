@@ -419,7 +419,7 @@ def training_step(model_engine, batch, config):
     logits, loss, structure_loss = model_engine(x, targets=y, attention_mask=None, loss_mask=loss_mask)
 
 
-    total_loss = loss + 5*structure_loss
+    total_loss = loss + 2*structure_loss
     
     # Backward pass
     model_engine.backward(total_loss)

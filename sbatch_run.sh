@@ -29,20 +29,21 @@ echo "Starting DeepSpeed training with 4 GPUs..."
 # batch_size will be automatically calculated based on micro_batch_size and world_size
 deepspeed --num_gpus=4 train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
-    -batch_size 16 \
-    --micro_batch_size 2 \
+    --batch_size 8 \
+    --micro_batch_size 1 \
     --learning_rate 2e-4 \
-    --max_iters 350000 \
+    --max_iters 450000 \
     --wandb_project "graspgpt-deepspeed" \
     --sort_unseg \
-    --output_dir ../output/exp47 \
+    --output_dir ../output/exp49 \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
     --add_unlabel_cropping \
     --enable_flood_fill \
     --del_z 0 \
-    --token_mode unseg_only \
-    --data_path ../output/precomputed_data_comb_all \
+    --token_mode unseg_and_scene_grasp \
+    --data_path ../output/precomputed_data_large \
+    --resume ../output/exp49/iter_372000 \
     #--resume ../output/exp45/iter_213000 \
     #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide
