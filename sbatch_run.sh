@@ -32,18 +32,19 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --batch_size 8 \
     --micro_batch_size 1 \
     --learning_rate 2e-4 \
-    --max_iters 450000 \
+    --max_iters 500000 \
     --wandb_project "graspgpt-deepspeed" \
     --sort_unseg \
-    --output_dir ../output/exp49 \
+    --output_dir ../output/exp51 \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
     --add_unlabel_cropping \
     --enable_flood_fill \
     --del_z 0 \
-    --token_mode unseg_and_scene_grasp \
+    --token_mode unseg_only \
+    --random_remove_sbs \
     --data_path ../output/precomputed_data_large \
-    --resume ../output/exp49/iter_372000 \
+    --resume ../output/exp49/iter_411000 \
     #--resume ../output/exp45/iter_213000 \
     #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide
@@ -51,6 +52,7 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     #--translation_argument \
     #--model_type gpt2-shallow-wide \
     #--add_unlabel_noise \
+    #--random_remove_sbs \
     #['unseg_and_scene_grasp', 'unseg_only', 'unseg_grasp']
 
 echo "Training completed!"
