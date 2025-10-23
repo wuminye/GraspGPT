@@ -72,6 +72,7 @@ def get_default_config():
     C.model.tags.add_unlabel_cropping = False
     C.model.tags.token_mode = "unseg_and_scene_grasp"
     C.model.tags.enable_flood_fill = False
+    C.model.tags.random_remove_sbs = False
 
     C.model.tags.del_z = 0   # only effect when translation_argument is enabled
 
@@ -479,6 +480,8 @@ def main():
                         help='Enable flood fill filtering when aggregating scenes')
     parser.add_argument('--del_z', type=int, default=0,
                        help='remove coords')
+    parser.add_argument('--random_remove_sbs', action='store_true',
+                       help='Enable random removal of some SBs from scenes (overrides config)')
     
     # Parse known args to handle DeepSpeed arguments
     args, unknown_args = parser.parse_known_args()
@@ -535,6 +538,8 @@ def main():
         config.model.model_type = args.model_type
     if args.del_z >0:
         config.model.tags.del_z = args.del_z
+    if args.random_remove_sbs:
+        config.model.tags.random_remove_sbs = True
 
     config.deepspeed.local_rank = args.local_rank
     
