@@ -694,7 +694,7 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
     #if real_data:
     #    translation[-1] = -1
     #else:
-    translation[-1] = 0  # z 轴不变
+    translation[-1] = abs(translation[-1])  # z 轴不变
 
 
     def _translate_sbs(sbs: List[SB]) -> List[SB]:
@@ -806,7 +806,7 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.3, p_up=0.3, p_down=0.3):
 
     return tuple(new_t)
 
-def random_remove_sbs(scene: Scene, remove_num_range = 3, p_remove=0.5) -> Scene:
+def random_remove_sbs(scene: Scene, remove_num_range = 3, p_remove=0.7) -> Scene:
     """随机删除 Scene 中的 SBs。"""
 
     if random.random() >= p_remove:

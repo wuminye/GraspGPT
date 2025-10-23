@@ -32,19 +32,17 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --batch_size 8 \
     --micro_batch_size 1 \
     --learning_rate 2e-4 \
-    --max_iters 500000 \
+    --max_iters 650000 \
     --wandb_project "graspgpt-deepspeed" \
-    --sort_unseg \
-    --output_dir ../output/exp51 \
+    --output_dir ../output/exp52 \
     --model_type gpt2-shallow-wide-1600-25 \
     --translation_argument \
-    --add_unlabel_cropping \
     --enable_flood_fill \
     --del_z 0 \
-    --token_mode unseg_only \
+    --token_mode unseg_and_scene_grasp \
     --random_remove_sbs \
-    --data_path ../output/precomputed_data_large \
-    --resume ../output/exp49/iter_411000 \
+    --data_path ../output/precomputed_data_comb_all \
+    --resume ../output/exp52/iter_510000 \
     #--resume ../output/exp45/iter_213000 \
     #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide

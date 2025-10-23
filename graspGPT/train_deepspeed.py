@@ -67,7 +67,7 @@ def get_default_config():
     
     C.model.tags.sort_unseg = False  # Whether to sort unsegmented scenes
     C.model.tags.translation_argument = False # Whether to include translation argumentation
-    C.model.tags.translate_scale = 5
+    C.model.tags.translate_scale = 7
     C.model.tags.add_unlabel_noise = False # Whether to randomly translate scenes
     C.model.tags.add_unlabel_cropping = False
     C.model.tags.token_mode = "unseg_and_scene_grasp"
