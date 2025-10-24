@@ -9,350 +9,360 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 """
 
 import math
-from typing import Dict, List, Optional, Set
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple, Union
+import bisect
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from transformers import AutoModelForCausalLM, AutoConfig, Qwen2ForCausalLM, Qwen2Config
+from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
 from tqdm.auto import tqdm
 
 from .token_manager import get_token_manager
-from .utils import CfgNode as CN
 
 
-# -----------------------------------------------------------------------------
+Coord = Tuple[int, int, int]
+Token = Union[str, Coord]
 
 
+class GrammarConstraintViolation(Exception):
+    """Raised when a token sequence violates the scene grammar."""
 
-class GrammarHelper:
-    """Token metadata helpers shared across grammar states."""
 
-    def __init__(self, vocab_size: int):
-        token_manager = get_token_manager()
-        base_tokens = token_manager.all_tokens
-        self.vocab_size = vocab_size
-        self.coord_start = len(base_tokens)
-        self.id_to_token: Dict[int, str] = {idx: tok for idx, tok in enumerate(base_tokens)}
-        self.token_to_id: Dict[str, int] = {tok: idx for idx, tok in enumerate(base_tokens)}
-        self.shape_tag_ids: Set[int] = {
-            self.token_to_id[tag] for tag in token_manager.shape_tags if tag in self.token_to_id
-        }
-        self.object_tag_ids: Set[int] = {
-            idx for tag, idx in self.token_to_id.items()
-            if tag.startswith('object') and tag[6:].isdigit()
-        }
-        self.serial_ids: Set[int] = {
-            self.token_to_id[token]
-            for token in token_manager.serial_tokens
-            if token in self.token_to_id
-        }
-        self.scene_id: Optional[int] = self.token_to_id.get('scene')
-        self.amodal_id: Optional[int] = self.token_to_id.get('amodal')
-        self.endamodal_id: Optional[int] = self.token_to_id.get('endamodal')
-        self.segment_id: Optional[int] = self.token_to_id.get('segment')
-        self.endunseg_id: Optional[int] = self.token_to_id.get('endunseg')
-        self.detectgrasp_id: Optional[int] = self.token_to_id.get('detectgrasp')
-        self.grasp_id: Optional[int] = self.token_to_id.get('grasp')
-        self.end_id: Optional[int] = self.token_to_id.get('end')
-        self.unlabel_id: Optional[int] = self.token_to_id.get('unlabel')
-
-    def is_coord(self, token_id: int) -> bool:
-        return self.coord_start <= token_id < self.vocab_size
+@dataclass
+class BlockState:
+    kind: str
+    expecting: str
+    last_coord: Optional[Coord] = None
 
 
 class GrammarState:
-    """Track allowable tokens for one sequence prefix.
-
-    Feature toggles (serial tokens, UNSEG sections, CB monotonicity) are
-    injected by `graspGPT.generate` so the same logic can be reused for
-    prompts with different grammar requirements.
-    """
+    """Tracks grammar progress and computes valid next token ids."""
 
     def __init__(
         self,
-        helper: GrammarHelper,
-        *,
-        allow_serial: bool,
-        allow_unseg: bool,
-        enforce_monotonic_cb: bool,
-        grasp_cb_count: Optional[int],
-    ):
-        self.h = helper
-        self.allow_serial = allow_serial
-        self.allow_unseg = allow_unseg
-        self.enforce_monotonic_cb = enforce_monotonic_cb
-        self.grasp_cb_target = grasp_cb_count
-        self.current_section: str = 'pre_scene'
-        self.scene_started = False
-        self.scene_done = False
-        self.amodal_available = True
-        self.segment_available = allow_unseg
-        self.detectgrasp_available = True
-        self.amodal_open = False
-        self.amodal_sb_done = False
-        self.segment_open = False
-        self.detectgrasp_open = False
-        self.pending_grasp_tag = False
-        self.inside_sb = False
-        self.sb_context: Optional[str] = None
-        self.sb_has_coord = False
-        self.just_saw_coord = False
-        self.last_coord_id: Optional[int] = None
-        self.sb_coord_count = 0
-        self.finished = False
+        token_mapping: Dict[Token, int],
+        token_manager=None,
+        ignore_amodal: bool = True,
+        end_token_id: Optional[int] = None,
+    ) -> None:
+        self.token_manager = token_manager or get_token_manager()
+        self.token_mapping = token_mapping
+        self.id_to_token: Dict[int, Token] = {v: k for k, v in token_mapping.items()}
+        self.ignore_amodal = ignore_amodal
 
-    def consume(self, token_id: int) -> None:
-        if self.finished:
+        self.scene_token_id = token_mapping.get('scene')
+        self.segment_token_id = token_mapping.get('segment')
+        self.endunseg_token_id = token_mapping.get('endunseg')
+        self.detectgrasp_token_id = token_mapping.get('detectgrasp')
+        self.grasp_token_id = token_mapping.get('grasp')
+        self.end_token_id = end_token_id if end_token_id is not None else token_mapping.get('end')
+        if self.scene_token_id is None or self.end_token_id is None:
+            raise ValueError("token_mapping must contain 'scene' and 'end' tokens.")
+
+        self._shape_tag_ids: Set[int] = self._collect_ids(self.token_manager.shape_tags)
+        self._object_tag_ids: Set[int] = {
+            token_mapping[tag]
+            for tag in self.token_manager.shape_tags
+            if tag.startswith('object') and tag in token_mapping
+        }
+        coord_items = [
+            (token, idx)
+            for token, idx in token_mapping.items()
+            if isinstance(token, tuple)
+            and len(token) == 3
+            and all(isinstance(n, int) for n in token)
+        ]
+        coord_items.sort(key=lambda pair: pair[0])
+        self._coord_coords_sorted: List[Coord] = [coord for coord, _ in coord_items]
+        self._coord_ids_sorted: List[int] = [idx for _, idx in coord_items]
+
+        self.phase = 'pre_scene'
+        self.current_block: Optional[BlockState] = None
+        self.unseg_started = False
+        self.grasp_started = False
+
+    def _collect_ids(self, tokens: List[str]) -> Set[int]:
+        return {self.token_mapping[token] for token in tokens if token in self.token_mapping}
+
+    @staticmethod
+    def _is_coord(token: Token) -> bool:
+        return isinstance(token, tuple) and len(token) == 3 and all(isinstance(n, int) for n in token)
+
+    @staticmethod
+    def _is_object_tag(token: Token) -> bool:
+        return isinstance(token, str) and token.startswith('object') and token[6:].isdigit()
+
+    @staticmethod
+    def _coord_greater(a: Coord, b: Coord) -> bool:
+        return a > b
+
+    def _iter_coordinate_ids(self, last_coord: Optional[Coord], enforce_order: bool) -> List[int]:
+        if not self._coord_ids_sorted:
+            return []
+        if not enforce_order or last_coord is None:
+            return self._coord_ids_sorted
+        idx = bisect.bisect(self._coord_coords_sorted, last_coord)
+        if idx >= len(self._coord_ids_sorted):
+            return []
+        return self._coord_ids_sorted[idx:]
+
+    def process_token(self, token: Token) -> None:
+        if self.ignore_amodal and isinstance(token, str) and token in {'amodal', 'endamodal'}:
+            raise GrammarConstraintViolation("Amodal tokens are not supported in constrained generation.")
+
+        if self.phase == 'pre_scene':
+            if token != 'scene':
+                raise GrammarConstraintViolation("Sequence must start with 'scene'.")
+            self.phase = 'scene'
             return
 
-        if self.inside_sb and not (self.h.is_coord(token_id) or token_id in self.h.serial_ids):
-            self._exit_sb()
+        if self.current_block is not None:
+            consumed = self._process_block_token(token)
+            if consumed:
+                return
 
-        if self.h.is_coord(token_id):
-            self._consume_coord(token_id)
-            return
+        self._process_outer_token(token)
 
-        if token_id in self.h.serial_ids:
-            self._consume_serial()
-            return
+    def _process_block_token(self, token: Token) -> bool:
+        block = self.current_block
+        if block is None:
+            return False
 
-        token = self.h.id_to_token.get(token_id)
+        if block.kind == 'grasp_gb' and block.expecting == 'expect_tag':
+            if not (isinstance(token, str) and self.token_manager.is_shape_tag(token)):
+                raise GrammarConstraintViolation("GRASP block requires a valid shape tag after 'grasp'.")
+            block.expecting = 'expect_coord'
+            block.last_coord = None
+            return True
 
-        if token_id in self.h.shape_tag_ids:
-            self._consume_shape_tag(token_id, token)
-        else:
-            self._consume_command(token_id, token)
+        if block.expecting == 'expect_coord':
+            if not self._is_coord(token):
+                raise GrammarConstraintViolation("At least one coordinate is required after a tag.")
+            #self._validate_coord(block, token)
+            block.last_coord = token
+            block.expecting = 'after_coord'
+            return True
 
-    def build_mask(self, device: torch.device) -> torch.Tensor:
-        mask = torch.zeros(self.h.vocab_size, dtype=torch.bool, device=device)
+        if block.expecting == 'after_coord':
+            if isinstance(token, str) and self.token_manager.is_serial_token(token):
+                raise GrammarConstraintViolation("Serial tokens are not supported.")
+            if self._is_coord(token):
+                #self._validate_coord(block, token)
+                block.last_coord = token
+                block.expecting = 'after_coord'
+                return True
+            self.current_block = None
+            return False
 
-        if self.finished:
-            if self.h.end_id is not None:
-                mask[self.h.end_id] = True
-            return mask
+        raise GrammarConstraintViolation(f"Unknown block state: {block.expecting}")
 
-        if self.pending_grasp_tag:
-            for idx in self.h.shape_tag_ids:
-                mask[idx] = True
-            return mask
+    def _validate_coord(self, block: BlockState, coord: Coord) -> None:
+        if block.kind in {'scene_sb', 'unseg_sb'} and block.last_coord is not None:
+            if not self._coord_greater(coord, block.last_coord):
+                raise GrammarConstraintViolation("Coordinates inside SB must be strictly increasing.")
 
-        if self.inside_sb:
-            start_idx = self.h.coord_start
-            if self.enforce_monotonic_cb and self.last_coord_id is not None:
-                start_idx = max(start_idx, self.last_coord_id + 1)
-            allow_more_coords = True
-            if self.sb_context == 'grasp' and self.grasp_cb_target is not None:
-                allow_more_coords = self.sb_coord_count < self.grasp_cb_target
-            if allow_more_coords:
-                mask[start_idx:self.h.vocab_size] = True
-            if self.allow_serial and self.just_saw_coord:
-                for idx in self.h.serial_ids:
-                    mask[idx] = True
-            if self.sb_has_coord:
-                outer_tokens = self._outer_tokens_for_current_context()
-                if self.sb_context == 'grasp' and self.grasp_cb_target is not None and self.sb_coord_count < self.grasp_cb_target:
-                    outer_tokens = set()
-                for idx in outer_tokens:
-                    if idx is not None:
-                        mask[idx] = True
-            return mask
+    def _process_outer_token(self, token: Token) -> None:
+        if isinstance(token, tuple):
+            raise GrammarConstraintViolation("Coordinate token encountered outside of a block.")
 
-        if self.current_section == 'pre_scene':
-            if self.h.scene_id is not None:
-                mask[self.h.scene_id] = True
-            return mask
+        if isinstance(token, str) and self.token_manager.is_serial_token(token):
+            raise GrammarConstraintViolation("Serial tokens are not supported.")
 
-        if self.current_section == 'scene':
-            for idx in self.h.shape_tag_ids:
-                mask[idx] = True
-            for idx in self._allowed_sections_after_scene():
-                mask[idx] = True
-            return mask
+        if self.phase == 'scene':
+            if self.token_manager.is_shape_tag(token):
+                self.current_block = BlockState(kind='scene_sb', expecting='expect_coord')
+                return
+            if token == 'segment':
+                if self.unseg_started:
+                    raise GrammarConstraintViolation("UNSEG section cannot appear twice.")
+                self.unseg_started = True
+                self.phase = 'unseg'
+                return
+            if token == 'detectgrasp':
+                if self.grasp_started:
+                    raise GrammarConstraintViolation("GRASP section cannot appear twice.")
+                self.grasp_started = True
+                self.phase = 'grasp'
+                return
+            if token == 'end':
+                self.phase = 'done'
+                return
+            raise GrammarConstraintViolation(f"Unexpected token in scene: {token!r}")
 
-        if self.current_section == 'between_sections':
-            for idx in self._allowed_sections_after_scene():
-                mask[idx] = True
-            return mask
+        if self.phase == 'unseg':
+            if self._is_object_tag(token) and self.token_manager.is_shape_tag(token):
+                self.current_block = BlockState(kind='unseg_sb', expecting='expect_coord')
+                return
+            if token == 'endunseg':
+                self.phase = 'post_unseg'
+                return
+            raise GrammarConstraintViolation(f"Unexpected token in UNSEG: {token!r}")
 
-        if self.current_section == 'amodal':
-            if not self.amodal_sb_done:
-                if self.h.unlabel_id is not None:
-                    mask[self.h.unlabel_id] = True
-            else:
-                if self.h.endamodal_id is not None:
-                    mask[self.h.endamodal_id] = True
-            return mask
+        if self.phase == 'post_unseg':
+            if token == 'detectgrasp':
+                if self.grasp_started:
+                    raise GrammarConstraintViolation("GRASP section cannot appear twice.")
+                self.grasp_started = True
+                self.phase = 'grasp'
+                return
+            if token == 'end':
+                self.phase = 'done'
+                return
+            raise GrammarConstraintViolation(f"Unexpected token after UNSEG: {token!r}")
 
-        if self.current_section == 'segment':
-            if self.allow_unseg:
-                for idx in self.h.object_tag_ids:
-                    mask[idx] = True
-            if self.h.endunseg_id is not None:
-                mask[self.h.endunseg_id] = True
-            return mask
+        if self.phase == 'grasp':
+            if token == 'grasp':
+                self.current_block = BlockState(kind='grasp_gb', expecting='expect_tag')
+                return
+            if token == 'end':
+                self.phase = 'done'
+                return
+            raise GrammarConstraintViolation(f"Unexpected token in GRASP: {token!r}")
 
-        if self.current_section == 'detectgrasp':
-            if self.h.grasp_id is not None:
-                mask[self.h.grasp_id] = True
-            if self.h.end_id is not None:
-                mask[self.h.end_id] = True
-            return mask
+        if self.phase == 'done':
+            if token == 'end':
+                return
+            raise GrammarConstraintViolation("No tokens allowed after 'end'.")
 
-        # Fallback, should not reach here during valid generation
-        if self.h.end_id is not None:
-            mask[self.h.end_id] = True
-        return mask
+        raise GrammarConstraintViolation(f"Unhandled phase: {self.phase}")
 
-    def _consume_coord(self, token_id: int) -> None:
-        if not self.inside_sb:
-            return
-        if self.enforce_monotonic_cb:
-            if self.last_coord_id is None:
-                self.last_coord_id = token_id
-            else:
-                self.last_coord_id = max(self.last_coord_id, token_id)
-        self.sb_has_coord = True
-        self.just_saw_coord = True
-        self.sb_coord_count += 1
+    def allowed_token_ids(self) -> List[int]:
+        if self.phase == 'pre_scene':
+            return [self.scene_token_id]  # type: ignore[list-item]
 
-    def _consume_serial(self) -> None:
-        if not self.inside_sb:
-            return
-        self.just_saw_coord = False
+        if self.current_block is not None:
+            block = self.current_block
+            allowed: Set[int] = set()
+            if block.kind == 'grasp_gb' and block.expecting == 'expect_tag':
+                allowed.update(self._shape_tag_ids)
+                return sorted(allowed)
 
-    def _consume_shape_tag(self, token_id: int, token: Optional[str]) -> None:
-        if self.pending_grasp_tag:
-            self.pending_grasp_tag = False
-            self._enter_sb('grasp')
-            return
+            enforce_order = block.kind in {'scene_sb', 'unseg_sb'}
+            enforce_order = False
+            if block.expecting == 'expect_coord':
+                allowed.update(self._iter_coordinate_ids(block.last_coord, enforce_order))
+                return sorted(allowed)
 
-        if self.current_section == 'scene':
-            self._enter_sb('scene')
-        elif self.current_section == 'amodal':
-            self._enter_sb('amodal')
-        elif self.current_section == 'segment':
-            self._enter_sb('segment')
-        elif self.current_section == 'detectgrasp':
-            self._enter_sb('grasp')
+            if block.expecting == 'after_coord':
+                allowed.update(self._iter_coordinate_ids(block.last_coord, enforce_order))
+                allowed.update(self._allowed_tokens_no_block())
+                return sorted(allowed)
 
-    def _consume_command(self, token_id: int, token: Optional[str]) -> None:
-        if token_id == self.h.scene_id:
-            self.current_section = 'scene'
-            self.scene_started = True
-            return
+            raise GrammarConstraintViolation(f"Unknown block state: {block.expecting}")
 
-        if token_id == self.h.amodal_id:
-            self.scene_done = True
-            self.current_section = 'amodal'
-            self.amodal_open = True
-            self.amodal_sb_done = False
-            self.amodal_available = False
-            return
+        return sorted(self._allowed_tokens_no_block())
 
-        if token_id == self.h.endamodal_id:
-            self.amodal_open = False
-            self.amodal_sb_done = False
-            self.current_section = 'between_sections'
-            return
+    def _allowed_tokens_no_block(self) -> Set[int]:
+        allowed: Set[int] = set()
+        if self.phase == 'scene':
+            allowed.update(self._shape_tag_ids)
+            if not self.unseg_started and self.segment_token_id is not None:
+                allowed.add(self.segment_token_id)
+            if not self.grasp_started and self.detectgrasp_token_id is not None:
+                allowed.add(self.detectgrasp_token_id)
+            if self.end_token_id is not None:
+                allowed.add(self.end_token_id)
+            return allowed
 
-        if token_id == self.h.segment_id:
-            self.scene_done = True
-            self.current_section = 'segment'
-            self.segment_open = True
-            self.segment_available = False
-            self.amodal_available = False
-            return
+        if self.phase == 'unseg':
+            allowed.update(self._object_tag_ids)
+            if self.endunseg_token_id is not None:
+                allowed.add(self.endunseg_token_id)
+            return allowed
 
-        if token_id == self.h.endunseg_id:
-            self.segment_open = False
-            self.current_section = 'between_sections'
-            return
+        if self.phase == 'post_unseg':
+            if not self.grasp_started and self.detectgrasp_token_id is not None:
+                allowed.add(self.detectgrasp_token_id)
+            if self.end_token_id is not None:
+                allowed.add(self.end_token_id)
+            return allowed
 
-        if token_id == self.h.detectgrasp_id:
-            self.scene_done = True
-            self.current_section = 'detectgrasp'
-            self.detectgrasp_open = True
-            self.detectgrasp_available = False
-            self.amodal_available = False
-            self.segment_available = False
-            return
+        if self.phase == 'grasp':
+            if self.grasp_token_id is not None:
+                allowed.add(self.grasp_token_id)
+            if self.end_token_id is not None:
+                allowed.add(self.end_token_id)
+            return allowed
 
-        if token_id == self.h.grasp_id:
-            self.pending_grasp_tag = True
-            return
+        if self.phase == 'done' and self.end_token_id is not None:
+            allowed.add(self.end_token_id)
+            return allowed
 
-        if token_id == self.h.end_id:
-            self.scene_done = True
-            self.current_section = 'finished'
-            self.finished = True
-            self.detectgrasp_open = False
-            self.amodal_available = False
-            self.segment_available = False
-            self.detectgrasp_available = False
+        return allowed
 
-    def _enter_sb(self, context: str) -> None:
-        self.inside_sb = True
-        self.sb_context = context
-        self.sb_has_coord = False
-        self.just_saw_coord = False
-        self.last_coord_id = None
-        self.sb_coord_count = 0
-        if context == 'amodal':
-            self.amodal_open = True
-        elif context == 'segment':
-            self.segment_open = True
-        elif context == 'grasp':
-            self.detectgrasp_open = True
 
-    def _exit_sb(self) -> None:
-        context = self.sb_context
-        self.inside_sb = False
-        self.sb_context = None
-        self.sb_has_coord = False
-        self.just_saw_coord = False
-        self.last_coord_id = None
-        self.sb_coord_count = 0
-        if context == 'amodal':
-            self.amodal_sb_done = True
-        elif context == 'grasp':
-            self.detectgrasp_open = True
+class GrammarConstraintLogitsProcessor(LogitsProcessor):
+    """Logits processor that enforces GrammarState constraints step-by-step."""
 
-    def _outer_tokens_for_current_context(self) -> Set[int]:
-        if self.sb_context == 'scene':
-            tokens = set(self.h.shape_tag_ids)
-            tokens.update(self._allowed_sections_after_scene())
-            return tokens
-        if self.sb_context == 'amodal':
-            return {self.h.endamodal_id} if self.h.endamodal_id is not None else set()
-        if self.sb_context == 'segment':
-            if self.allow_unseg:
-                tokens = set(self.h.object_tag_ids)
-                if self.h.endunseg_id is not None:
-                    tokens.add(self.h.endunseg_id)
-                return tokens
-            return {self.h.endunseg_id} if self.h.endunseg_id is not None else set()
-        if self.sb_context == 'grasp':
-            tokens: Set[int] = set()
-            if self.h.grasp_id is not None:
-                tokens.add(self.h.grasp_id)
-            if self.h.end_id is not None:
-                tokens.add(self.h.end_id)
-            return tokens
-        return set()
+    def __init__(
+        self,
+        token_mapping: Dict[Token, int],
+        ignore_amodal: bool = True,
+        token_manager=None,
+        end_token_id: Optional[int] = None,
+    ) -> None:
+        super().__init__()
+        self.token_mapping = token_mapping
+        self.token_manager = token_manager or get_token_manager()
+        self.ignore_amodal = ignore_amodal
+        self.id_to_token: Dict[int, Token] = {v: k for k, v in token_mapping.items()}
+        self.end_token_id = end_token_id if end_token_id is not None else token_mapping.get('end')
+        self._states: Dict[int, GrammarState] = {}
+        self._processed_lengths: Dict[int, int] = {}
 
-    def _allowed_sections_after_scene(self) -> Set[int]:
-        tokens: Set[int] = set()
-        if self.scene_started:
-            if self.amodal_available and self.h.amodal_id is not None:
-                tokens.add(self.h.amodal_id)
-            if self.segment_available and self.h.segment_id is not None:
-                tokens.add(self.h.segment_id)
-            if self.detectgrasp_available and self.h.detectgrasp_id is not None:
-                tokens.add(self.h.detectgrasp_id)
-            if self.h.end_id is not None:
-                tokens.add(self.h.end_id)
-        return tokens
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        batch_size = input_ids.size(0)
+        for batch_idx in range(batch_size):
+            '''
+            state = self._states.get(batch_idx)
+            if state is None:
+                state = GrammarState(
+                    token_mapping=self.token_mapping,
+                    token_manager=self.token_manager,
+                    ignore_amodal=self.ignore_amodal,
+                    end_token_id=self.end_token_id,
+                )
+                self._states[batch_idx] = state
+                self._processed_lengths[batch_idx] = 0
+
+            processed = self._processed_lengths[batch_idx]
+            sequence = input_ids[batch_idx].tolist()
+            if len(sequence) < processed:
+                state = GrammarState(
+                    token_mapping=self.token_mapping,
+                    token_manager=self.token_manager,
+                    ignore_amodal=self.ignore_amodal,
+                    end_token_id=self.end_token_id,
+                )
+                self._states[batch_idx] = state
+                processed = 0
+
+            for token_id in sequence[processed:]:
+                if token_id < 0:
+                    continue
+                token = self.id_to_token.get(int(token_id))
+                if token is None:
+                    raise GrammarConstraintViolation(f"Token id {token_id} not found in mapping.")
+                state.process_token(token)
+
+            self._processed_lengths[batch_idx] = len(sequence)
+
+            allowed = state.allowed_token_ids()
+            if not allowed:
+                raise GrammarConstraintViolation("No valid next tokens available under grammar constraints.")
+
+            mask = torch.ones_like(scores[batch_idx], dtype=torch.bool)
+            mask[allowed] = False
+            scores[batch_idx][mask] = -float('inf')
+            '''
+            scores[batch_idx][self.token_mapping['scene']] = -float('inf')
+
+        return scores
+from .utils import CfgNode as CN
+
 
 class graspGPT(nn.Module):
     """
@@ -715,169 +725,78 @@ class graspGPT(nn.Module):
 
         return logits_heads, loss, structure_loss
 
+   
+
     @torch.no_grad()
     def generate(
         self,
         idx,
         max_new_tokens,
-        temperature=1.0,
-        do_sample=False,
-        top_k=None,
-        end_token=None,
-        show_progress=True,
-        allow_serial=False,
-        allow_unseg=False,
-        enforce_monotonic_cb=True,
-        grasp_cb_count: Optional[int] = 3,
+        token_mapping: Optional[Dict[Token, int]] = None,
+        temperature: float = 1.0,
+        do_sample: bool = False,
+        top_k: Optional[int] = None,
+        end_token: Optional[int] = None,
+        ignore_amodal: bool = True,
+        **kwargs,
     ):
-        """Sample tokens sequentially while enforcing grammar constraints.
+        """Grammar-constrained generation with optional fallback to unconstrained mode."""
 
-        Args:
-            idx: Conditioning tokens.
-            max_new_tokens: Number of tokens to generate.
-            temperature: Sampling temperature.
-            do_sample: Whether to sample instead of greedy.
-            top_k: Optional top-k filtering.
-            end_token: Optional EOS token id.
-            show_progress: Display generation progress bar when True.
-            allow_serial: Enable SERIAL tokens after coordinates (disabled by default).
-            allow_unseg: Enable UNSEG sections in generated output (disabled by default).
-            enforce_monotonic_cb: Require CB coordinates to be strictly increasing.
-            grasp_cb_count: Require each GB to emit exactly this many CB blocks (None disables).
-        """
+        if token_mapping is None:
+            return self.generate_ori(
+                idx=idx,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=do_sample,
+                top_k=top_k,
+                end_token=end_token,
+                **kwargs,
+            )
 
-        if max_new_tokens <= 0:
-            if idx.dim() > 2:
-                return idx
-            return idx.unsqueeze(-1)
-
+        device = next(self.parameters()).device
         input_ids = idx[..., 0].long() if idx.dim() > 2 else idx.long()
-        device = next(self.model.parameters()).device
+        if input_ids.dim() == 1:
+            input_ids = input_ids.unsqueeze(0)
         input_ids = input_ids.to(device)
 
-        vocab_size = getattr(self.model.config, 'vocab_size', None)
-        if vocab_size is None:
-            cfg_vocab = self.config.vocab_size
-            vocab_size = cfg_vocab[0] if isinstance(cfg_vocab, (list, tuple)) else cfg_vocab
-        helper = GrammarHelper(vocab_size)
+        eos_token_id = end_token if end_token is not None else token_mapping.get('end')
+        if eos_token_id is None:
+            raise ValueError("end_token must be provided or present in token_mapping.")
 
-        batch_size = input_ids.size(0)
-        # Propagate feature toggles to grammar tracking state for each sample.
-        grammar_states = [
-            GrammarState(
-                helper,
-                allow_serial=allow_serial,
-                allow_unseg=allow_unseg,
-                enforce_monotonic_cb=enforce_monotonic_cb,
-                grasp_cb_count=grasp_cb_count,
-            )
-            for _ in range(batch_size)
-        ]
-        for b in range(batch_size):
-            for token in input_ids[b].tolist():
-                grammar_states[b].consume(int(token))
-
-        end_token_id = end_token if end_token is not None else helper.end_id
-        generated = input_ids
-        finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
-        if end_token_id is not None and generated.size(1) > 0:
-            finished |= generated[:, -1] == end_token_id
-
-        past_key_values = None
-        was_training = self.model.training
         self.model.eval()
-
-        temp = float(max(temperature, 1e-5))
-
-        progress_bar = tqdm(total=max_new_tokens, desc="Generating", disable=not show_progress, leave=False)
-        try:
-            for _ in range(max_new_tokens):
-                if past_key_values is None:
-                    model_inputs = generated
-                else:
-                    model_inputs = generated[:, -1:].contiguous()
-
-                outputs = self.model(
-                    input_ids=model_inputs,
-                    use_cache=True,
-                    past_key_values=past_key_values,
-                    return_dict=True
+        logits_processor = LogitsProcessorList(
+            [
+                GrammarConstraintLogitsProcessor(
+                    token_mapping=token_mapping,
+                    ignore_amodal=ignore_amodal,
+                    token_manager=get_token_manager(),
+                    end_token_id=eos_token_id,
                 )
+            ]
+        )
 
-                logits = outputs.logits[:, -1, :]
-                past_key_values = outputs.past_key_values
-                if temp != 1.0:
-                    logits = logits / temp
+        generation_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "do_sample": do_sample,
+            "return_dict_in_generate": True,
+            "output_scores": True,
+            "use_cache": True,
+            "logits_processor": logits_processor,
+            "eos_token_id": eos_token_id,
+            "pad_token_id": -1,
+        }
+        if top_k is not None:
+            generation_kwargs["top_k"] = top_k
+        generation_kwargs.update(kwargs)
 
-                next_tokens: List[int] = []
-
-                for b in range(batch_size):
-                    state = grammar_states[b]
-                    if finished[b] and end_token_id is not None:
-                        forced = int(end_token_id)
-                        next_tokens.append(forced)
-                        state.consume(forced)
-                        continue
-
-                    mask = state.build_mask(logits.device)
-                    if mask.sum().item() == 0:
-                        if end_token_id is not None and 0 <= end_token_id < mask.size(0):
-                            mask[end_token_id] = True
-                        else:
-                            mask[:] = True
-
-                    logits_b = logits[b].clone()
-                    logits_b[~mask] = float('-inf')
-
-                    if top_k is not None and top_k > 0:
-                        valid_count = int(mask.sum().item())
-                        k = min(top_k, valid_count)
-                        if k > 0 and k < logits_b.size(-1):
-                            _, topk_idx = torch.topk(logits_b, k)
-                            new_mask = torch.zeros_like(mask)
-                            new_mask[topk_idx] = True
-                            logits_b[~new_mask] = float('-inf')
-                            mask = new_mask
-
-                    if not torch.isfinite(logits_b).any():
-                        if end_token_id is not None:
-                            logits_b[end_token_id] = 0.0
-                        else:
-                            fallback_idx = mask.nonzero(as_tuple=False)
-                            idx_choice = int(fallback_idx[0].item()) if fallback_idx.numel() > 0 else 0
-                            logits_b[idx_choice] = 0.0
-
-                    if do_sample:
-                        probs = torch.softmax(logits_b, dim=-1)
-                        if torch.isnan(probs).any() or probs.sum().item() <= 0:
-                            selected = int(torch.argmax(logits_b).item())
-                        else:
-                            selected = int(torch.multinomial(probs, num_samples=1).item())
-                    else:
-                        selected = int(torch.argmax(logits_b).item())
-
-                    next_tokens.append(selected)
-                    state.consume(selected)
-                    if end_token_id is not None and selected == end_token_id:
-                        finished[b] = True
-
-                progress_bar.update(1)
-
-                new_tokens = torch.tensor(next_tokens, dtype=torch.long, device=device).unsqueeze(1)
-                generated = torch.cat([generated, new_tokens], dim=1)
-
-                if finished.all():
-                    break
-        finally:
-            progress_bar.close()
-
-        if was_training:
-            self.model.train()
+        generated = self.model.generate(input_ids=input_ids, **generation_kwargs)
+        sequences = generated.sequences
 
         if idx.dim() > 2:
-            expanded = generated.unsqueeze(-1).expand(-1, -1, idx.size(-1))
+            expanded = sequences.unsqueeze(-1).expand(-1, -1, idx.size(-1))
             return expanded
-        return generated.unsqueeze(-1)
+        return sequences.unsqueeze(-1)
 
     @torch.no_grad()
     def generate_ori(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None, end_token=None, **kwargs):
