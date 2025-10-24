@@ -30,19 +30,20 @@ echo "Starting DeepSpeed training with 4 GPUs..."
 deepspeed --num_gpus=4 train_deepspeed.py \
     --deepspeed_config ../deepspeed_config.json \
     --batch_size 8 \
+    --sort_unseg \
     --micro_batch_size 1 \
-    --learning_rate 2e-4 \
-    --max_iters 750000 \
+    --learning_rate 1e-4 \
+    --max_iters 850000 \
     --wandb_project "graspgpt-deepspeed" \
-    --output_dir ../output/exp64 \
-    --model_type gpt2-large \
+    --output_dir ../output/exp61 \
+    --model_type gpt2-shallow-wide-2048-9 \
     --translation_argument \
     --enable_flood_fill \
     --del_z 0 \
-    --token_mode unseg_and_scene_grasp \
+    --token_mode unseg_only \
     --random_remove_sbs \
     --data_path ../output/precomputed_data_comb_all \
-    #--resume ../output/exp52/iter_666000 \
+    --resume ../output/exp61/iter_48000 \
     #--resume ../output/exp45/iter_213000 \
     #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide

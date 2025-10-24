@@ -632,9 +632,8 @@ class MaskSerializer:
         tokens: List[TokenMask] = [1, 1]
         
         # Add all CB tokens
-        for cb in gb.cbs:
-            tokens.extend(MaskSerializer._serialize_cb(cb))
-        
+        for i, cb in enumerate(gb.cbs):
+            tokens.extend(MaskSerializer._serialize_cb(cb, important=(i>0)))
         return tokens
     
     @staticmethod

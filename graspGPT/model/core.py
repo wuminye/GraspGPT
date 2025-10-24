@@ -807,7 +807,7 @@ def maybe_modify_tuple_np(t, max_values, p_modify=0.3, p_up=0.3, p_down=0.3):
 
     return tuple(new_t)
 
-def random_remove_sbs(scene: Scene, remove_num_range = 3, p_remove=0.7) -> Scene:
+def random_remove_sbs(scene: Scene, remove_num_range = 3, p_remove=0.6) -> Scene:
     """随机删除 Scene 中的 SBs。"""
 
     if random.random() >= p_remove:

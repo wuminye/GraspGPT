@@ -253,6 +253,7 @@ class PrecomputedDataset(Dataset):
                     random.shuffle(filtered_gbs)
                     if len(filtered_gbs)>700:
                         filtered_gbs = filtered_gbs[:700]
+                    #filtered_gbs.sort(key=lambda gb: gb.cbs[0].coord)  
                     # 更新GRASP的GB列表
                     item.gbs = filtered_gbs
                     grasp_block = item
@@ -367,7 +368,7 @@ class PrecomputedDataset(Dataset):
         tokens = encode_sequence(tokens, self.token_mapping)
 
         #tokens = tokens[:-1]  # Remove the final EOS token for training
-        if self.tags.token_mode in ["unseg_and_scene_grasp", "unseg_grasp"]:
+        if self.tags.token_mode in ["unseg_and_scene_grasp", "unseg_grasp"] and not rn_flag:
             mask[-1] = 0
 
         seq_len = len(tokens)
