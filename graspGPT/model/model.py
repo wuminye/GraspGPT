@@ -462,6 +462,7 @@ class graspGPT(nn.Module):
                 #MY models
                 'gpt2-shallow-wide':    dict(n_layer=6, n_head=20, n_embd=1280),  
                 'gpt2-shallow-wide-1600-25':    dict(n_layer=7, n_head=24, n_embd=1536),
+                'gpt2-shallow-wide-2048-9':    dict(n_layer=9, n_head=32, n_embd=2048),
                 'gpt2-shallow-wide-2048':    dict(n_layer=6, n_head=16, n_embd=2048), 
                 'gpt2-shallow-wide-2048-32':    dict(n_layer=6, n_head=32, n_embd=2048),
                 'gpt2-shallow-wide-4096':    dict(n_layer=6, n_head=16, n_embd=4096), 
@@ -655,8 +656,8 @@ class graspGPT(nn.Module):
             content_mask = (mask == 1) & (target_tokens != -1)
             structure_mask = (mask == 2) & (target_tokens != -1)
             #valid = mask & (target_tokens != -1)
-            content_loss = 0.0
-            structure_loss = 0.0
+            content_loss = logits_flat.sum() * 0.0
+            structure_loss = logits_flat.sum() * 0.0
             if content_mask.any():
                 content_loss = F.cross_entropy(logits_flat[content_mask], target_tokens[content_mask])
             if structure_mask.any():
