@@ -1,15 +1,15 @@
 #!/bin/bash
 
 
-#SBATCH --job-name=exp46            # Descriptive job name
-#SBATCH --time=18:30:00                       # Maximum wall time (hh:mm:ss)
+#SBATCH --job-name=exp64            # Descriptive job name
+#SBATCH --time=20:30:00                       # Maximum wall time (hh:mm:ss)
 #SBATCH --nodes=1                             # Number of nodes to use
 #SBATCH --ntasks-per-node=4                   # Number of MPI tasks per node (e.g., 1 per GPU)
 #SBATCH --cpus-per-task=5                    # Number of CPU cores per task (adjust as needed)
 #SBATCH --gres=gpu:4                          # Number of GPUs per node (adjust to match hardware)
 #SBATCH --partition=boost_usr_prod           # GPU-enabled partition
-#SBATCH --output=logs/exp46.out              # File for standard output
-#SBATCH --error=logs/exp46.err               # File for standard error
+#SBATCH --output=logs/exp64.out              # File for standard output
+#SBATCH --error=logs/exp64.err               # File for standard error
 #SBATCH --account=EUHPC_D22_064          # Project account number
 
 # Load necessary modules (adjust to your environment)
@@ -32,17 +32,17 @@ deepspeed --num_gpus=4 train_deepspeed.py \
     --batch_size 8 \
     --micro_batch_size 1 \
     --learning_rate 2e-4 \
-    --max_iters 650000 \
+    --max_iters 750000 \
     --wandb_project "graspgpt-deepspeed" \
-    --output_dir ../output/exp52 \
-    --model_type gpt2-shallow-wide-1600-25 \
+    --output_dir ../output/exp64 \
+    --model_type gpt2-large \
     --translation_argument \
     --enable_flood_fill \
     --del_z 0 \
     --token_mode unseg_and_scene_grasp \
     --random_remove_sbs \
     --data_path ../output/precomputed_data_comb_all \
-    --resume ../output/exp52/iter_510000 \
+    #--resume ../output/exp52/iter_666000 \
     #--resume ../output/exp45/iter_213000 \
     #--resume ../output/exp38/iter_276000\
     #--model_type gpt2-shallow-wide

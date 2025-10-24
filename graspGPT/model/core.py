@@ -694,6 +694,7 @@ def random_translation_argument(tokens, max_values,scale=5,real_data = False):
     #if real_data:
     #    translation[-1] = -1
     #else:
+    translation[-1] = random.randint(0, scale*2)
     translation[-1] = abs(translation[-1])  # z 轴不变
 
 
